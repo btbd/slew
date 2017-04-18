@@ -1,0 +1,17 @@
+strings = [ "\"", '\'', "\xE1", "new\nline", "\\n", "\ttab" ];
+
+for (i := 0; i < length(strings); ++i) {
+	Console.println(get(strings, i));
+}
+
+/* Expected output:
+
+"""
+"'"
+"ß"
+"new
+line"
+"\n"
+"       tab"
+
+*/
