@@ -17,6 +17,7 @@ int main(int argc, char *argv[]) {
 				for (; i < tokens->length; ++i) {
 					TREE *tree = CreateTree(tokens, &i);
 					if (tree) {
+						PrintTree(tree);
 						VALUE value = Eval(tree, 0);
 						fputs("< ", stdout);
 						PrintValue(&value);

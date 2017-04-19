@@ -58,5 +58,5 @@ VALUE *Value_GetProperty(VALUE *value, char *name);
 int Value_HasProperty(VALUE *value, char *name);
 void Value_CallGetter(VALUE *value);
 void Value_CallSetter(VALUE *value);
-void Value_Call(VALUE *value);
+void Value_Call(VALUE *value, VALUE args);
 void PrintValue(VALUE *value);

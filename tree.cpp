@@ -521,6 +521,7 @@ binary:
 
 													t = (TOKEN *)Array_Get(tokens, ++(*i));
 													if (t->type == TOKEN_CLOSE_BRACE || t->type == TOKEN_SEMICOLON) {
+														--(*i);
 														break;
 													}
 													continue;
@@ -568,6 +569,7 @@ binary:
 
 													t = (TOKEN *)Array_Get(tokens, ++(*i));
 													if (t->type == TOKEN_CLOSE_BRACE || t->type == TOKEN_SEMICOLON) {
+														--(*i);
 														break;
 													}
 													continue;

@@ -1432,13 +1432,24 @@ void Value_CallSetter(VALUE *v) {
 	}
 }
 
-void Value_Call(VALUE *value) {
+void Value_Call(VALUE *value, VALUE args) {
 	if (value) {
 		if (value->type == VALUE_FUNCTION && value->function) {
-			VALUE args = Value_Array();
 			Stack_Push("", &Value_Scope(), -1);
 			Stack_Push("arguments", &args, 1);
 			Stack_Push("this", &Value_Number(0), 1);
+
+			TREE *name = value->function->left;
+			for (unsigned int i = 0; i < args.array->length; ++i) {
+				if (name) {
+					VALUE *v = (VALUE *)Array_Get(args.array, i);
+					v->name = name->token->value;
+					Stack_Push(name->token->value, v, 1);
+					name = name->left;
+				} else {
+					break;
+				}
+			}
 
 			VALUE v = { 0 };
 			TREE *tree = value->function;
