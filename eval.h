@@ -1,5 +1,9 @@
 #pragma once
 
+#define COMPILED_FUNC VALUE (*)(VALUE *this_, ARRAY *arguments)
+#define RETURN_OUT(v) v.return_ = true; return v;
+#define GetHandle(v) ((HANDLE)((SINT)((VALUE *)ValueGetProperty(v, "handle"))->number))
+
 enum {
 	VALUE_NUMBER = 0,
 	VALUE_STRING,
@@ -10,13 +14,11 @@ enum {
 	VALUE_SCOPE
 };
 
-#define RETURN_OUT(v) v.return_ = 1; return v;
-#define COMPILED_FUNC VALUE (*)(ARRAY *arguments)
-
 typedef struct {
-	unsigned int type;
+	unsigned char type;
 	char *name;
-	int stack_id, return_;
+	int stack_id;
+	bool return_;
 
 	union {
 		double number;
@@ -32,31 +34,28 @@ typedef struct {
 		ARRAY *array;
 	};
 
-	ARRAY *properties;
+	ARRAY properties;
 } VALUE;
 
 void SetupLibraries();
+
 VALUE Eval(TREE *tree, int stack_id);
-int Stack_InStack(int stack_id, char *name);
-VALUE *Stack_Get(char *name);
-VALUE *Stack_GetWithProperties(TREE *var);
-VALUE *Stack_Set(TREE *var, VALUE *value, int stack_id);
-VALUE *Stack_Push(char *name, VALUE *value, int stack_id);
-void PrintStack();
-void Value_Free(VALUE *value);
-VALUE Value_Number(double number);
-VALUE Value_String(char *string_);
-VALUE Value_Array();
-VALUE Value_Function(TREE *function);
-VALUE Value_Compiled_Function(void *function);
-VALUE Value_Scope();
-void Value_MergeProperties(VALUE *value, ARRAY *properties);
-VALUE Value_Copy(VALUE *value);
-VALUE Value_CopyWithName(VALUE *value, char *name);
-VALUE *Value_SetProperty(VALUE *value, char *name, VALUE *property);
-VALUE *Value_GetProperty(VALUE *value, char *name);
-int Value_HasProperty(VALUE *value, char *name);
-void Value_CallGetter(VALUE *value);
-void Value_CallSetter(VALUE *value);
-void Value_Call(VALUE *value, VALUE args);
-void PrintValue(VALUE *value);
+VALUE ValueNumber(double number);
+VALUE ValueString(char *string_);
+VALUE ValueRawString(char *string_);
+VALUE ValueArray();
+VALUE ValueFunction(TREE *function);
+VALUE ValueScope();
+VALUE ValueCopy(VALUE *value);
+VALUE ValueCompiledFunction(void *function);
+void PrintValue(VALUE *value, bool quotes);
+void ValueFree(VALUE *value);
+void ValueFreeEx(VALUE *value);
+VALUE *ValueGetProperty(VALUE *value, char *name);
+VALUE *ValueSetProperty(VALUE *value, char *name, VALUE *property);
+
+bool StackContains(char *name, int stack_id);
+VALUE *StackPush(char *name, VALUE *value, int stack_id);
+VALUE *StackGet(char *name, int stack_id);
+VALUE *StackGetWithProperties(TREE *var, int stack_id);
+void StackSet(TREE *var, VALUE *value, int stack_id);

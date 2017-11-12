@@ -1,36 +1,36 @@
-﻿#include "main.h"
+#include "main.h"
 
-int main(int argc, char *argv[]) {
+int main(int argc, char **argv) {
 	SetupLibraries();
 
 	if (argc < 2) {
-		char input[0xFFFF];
+		static char input[0xFFFF] = { 0 };
 
 		for (char *buffer = input;; buffer = input) {
 			fputs("> ", stdout);
 			while ((*buffer++ = getchar()) != '\n');
 			*buffer = 0;
 
-			ARRAY *tokens = GetTokens(input);
-			if (tokens) {
-				unsigned int i = 0;
-				for (; i < tokens->length; ++i) {
-					TREE *tree = CreateTree(tokens, &i);
+			ARRAY tokens = GetTokens(input);
+			if (tokens.length > 0) {
+				for (unsigned int i = 0; i < tokens.length; ++i) {
+					TREE *tree = CreateTree(&tokens, &i, false);
 					if (tree) {
-						PrintTree(tree);
+						// PrintTree(tree);
 						VALUE value = Eval(tree, 0);
 						fputs("< ", stdout);
-						PrintValue(&value);
+						PrintValue(&value, 1);
 						putchar('\n');
-						Value_Free(&value);
-						free(tree);
+						// ValueFree(&value);
+						FreeTree(tree);
 					}
 				}
-				for (i = 0; i < tokens->length; ++i) {
-					free(((TOKEN *)Array_Get(tokens, i))->value);
+
+				for (unsigned int t = 0; t < tokens.length; ++t) {
+					free(((TOKEN *)ArrayGet(&tokens, t))->value);
 				}
-				Array_Free(tokens);
 			}
+			ArrayFree(&tokens);
 		}
 	} else {
 		FILE *file = fopen(argv[1], "rb");
@@ -46,23 +46,23 @@ int main(int argc, char *argv[]) {
 		fread(buffer, length, 1, file);
 		fclose(file);
 
-		ARRAY *tokens = GetTokens(buffer);
-		if (tokens) {
-			unsigned int i = 0;
-			for (; i < tokens->length; ++i) {
-				TREE *tree = CreateTree(tokens, &i);
-
+		ARRAY tokens = GetTokens(buffer);
+		if (tokens.length > 0) {
+			for (unsigned int i = 0; i < tokens.length; ++i) {
+				TREE *tree = CreateTree(&tokens, &i, false);
 				if (tree) {
 					VALUE value = Eval(tree, 0);
-					Value_Free(&value);
-					free(tree);
+					FreeTree(tree);
 				}
 			}
-			for (i = 0; i < tokens->length; ++i) {
-				free(((TOKEN *)Array_Get(tokens, i))->value);
+
+			for (unsigned int t = 0; t < tokens.length; ++t) {
+				free(((TOKEN *)ArrayGet(&tokens, t))->value);
 			}
-			Array_Free(tokens);
 		}
+		ArrayFree(&tokens);
+
+		free(buffer);
 	}
 
 	return 0;

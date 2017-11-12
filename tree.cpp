@@ -1,14 +1,32 @@
 ﻿#include "main.h"
 
-TREE *CreateTree(ARRAY *tokens, unsigned int *i) {
-	ARRAY *expression_stack = Array_New(sizeof(TREE));
-	ARRAY *operator_stack = Array_New(sizeof(TOKEN *));
+TOKEN *CopyToken(TOKEN *token) {
+	TOKEN *t = (TOKEN *)calloc(sizeof(TOKEN), 1);
+	memcpy(t, token, sizeof(TOKEN));
+	t->value = _strdup(token->value);
+	return t;
+}
+
+void FreeToken(TOKEN *token) {
+	if (token->value) {
+		free(token->value);
+	}
+	free(token);
+}
+
+TREE *CreateTree(ARRAY *tokens, unsigned int *i, bool sign) {
+	ARRAY expression_stack = ArrayNew(sizeof(TREE));
+	ARRAY operator_stack = ArrayNew(sizeof(TOKEN *));
 
 	TOKEN *token = 0;
 	TOKEN *token_previous = 0;
 
 	for (; *i < tokens->length; ++(*i)) {
-		token = (TOKEN *)Array_Get(tokens, *i);
+		if (sign && operator_stack.length > 0) {
+			--(*i);
+			goto leave;
+		}
+		token = (TOKEN *)ArrayGet(tokens, *i);
 
 		switch (token->class_) {
 			case TOKEN_CLASS_IGNORE:
@@ -19,14 +37,14 @@ TREE *CreateTree(ARRAY *tokens, unsigned int *i) {
 
 					call.left = (TREE *)calloc(sizeof(TREE), 1);
 					call.token = (TOKEN *)calloc(sizeof(TREE), 1);
-					call.token->value = "()";
+					call.token->value = _strdup("()");
 					call.token->value_length = 2;
 					call.token->type = TOKEN_CALL;
 					token = call.token;
-					Array_Pop(expression_stack, call.left);
+					ArrayPop(&expression_stack, call.left);
 
 					TOKEN *comma = (TOKEN *)calloc(sizeof(TOKEN), 1);
-					comma->value = ",";
+					comma->value = _strdup(",");
 					comma->value_length = 1;
 					comma->class_ = TOKEN_CLASS_COMMA;
 					comma->type = TOKEN_COMMA;
@@ -35,14 +53,14 @@ TREE *CreateTree(ARRAY *tokens, unsigned int *i) {
 					TOKEN *t;
 					for (++(*i);; ++(*i)) {
 						tree = (tree->right = (TREE *)calloc(sizeof(TREE), 1));
-						tree->token = comma;
-						tree->left = CreateTree(tokens, i);
+						tree->token = CopyToken(comma);
+						tree->left = CreateTree(tokens, i, false);
 
 						if (!tree->left) {
 							break;
 						}
 
-						t = (TOKEN *)Array_Get(tokens, *i);
+						t = (TOKEN *)ArrayGet(tokens, *i);
 						if (t->type == TOKEN_CLOSE_PAREN) {
 							break;
 						} else if (t->type != TOKEN_COMMA) {
@@ -51,15 +69,16 @@ TREE *CreateTree(ARRAY *tokens, unsigned int *i) {
 						}
 					}
 
-					Array_Push(expression_stack, &call);
+					FreeToken(comma);
+					ArrayPush(&expression_stack, &call);
 				} else {
 					++(*i);
-					TREE *e = CreateTree(tokens, i);
+					TREE *e = CreateTree(tokens, i, false);
 					if (!e) {
 						goto error;
 					}
 
-					Array_Push(expression_stack, e);
+					ArrayPush(&expression_stack, e);
 				}
 
 				break;
@@ -67,62 +86,64 @@ TREE *CreateTree(ARRAY *tokens, unsigned int *i) {
 			case TOKEN_CLASS_CPAREN: case TOKEN_CLASS_COMMA: case TOKEN_CLASS_SEMICOLON: case TOKEN_CLASS_CBRACE: case TOKEN_CLASS_CBRACKET: case TOKEN_CLASS_COLON:
 				goto leave;
 			case TOKEN_CLASS_QUESTION: {
-				if (expression_stack->length > 0) {
+				if (expression_stack.length > 0) {
 					TREE e;
-					e.token = token;
+					e.token = CopyToken(token);
 					e.left = (TREE *)calloc(sizeof(TREE), 1);
 
-					while (operator_stack->length > 0) {
-						TOKEN *o = (*(TOKEN **)Array_Get(operator_stack, operator_stack->length - 1));
-						if (o->class_ == TOKEN_CLASS_BINARY && expression_stack->length > 1) {
+					while (operator_stack.length > 0) {
+						TOKEN *o = (*(TOKEN **)ArrayGet(&operator_stack, operator_stack.length - 1));
+						if (o->class_ == TOKEN_CLASS_BINARY && expression_stack.length > 1) {
 							TREE *e1 = (TREE *)malloc(sizeof(TREE));
 							TREE *e2 = (TREE *)malloc(sizeof(TREE));
 
-							Array_Pop(expression_stack, e2);
-							Array_Pop(expression_stack, e1);
+							ArrayPop(&expression_stack, e2);
+							ArrayPop(&expression_stack, e1);
 
 							TREE expression;
-							Array_Pop(operator_stack, &expression.token);
+							ArrayPop(&operator_stack, &expression.token);
+							expression.token = CopyToken(expression.token);
 							expression.left = e1;
 							expression.right = e2;
 
-							Array_Push(expression_stack, &expression);
+							ArrayPush(&expression_stack, &expression);
 						} else {
 							TREE *e = (TREE *)malloc(sizeof(TREE));
 
-							Array_Pop(expression_stack, e);
+							ArrayPop(&expression_stack, e);
 
 							TREE expression;
-							Array_Pop(operator_stack, &expression.token);
+							ArrayPop(&operator_stack, &expression.token);
+							expression.token = CopyToken(expression.token);
 							expression.left = e;
 							expression.right = 0;
 
-							Array_Push(expression_stack, &expression);
+							ArrayPush(&expression_stack, &expression);
 						}
 					}
 
-					Array_Pop(expression_stack, e.left);
+					ArrayPop(&expression_stack, e.left);
 					e.right = (TREE *)calloc(sizeof(TREE), 1);
 
 					e.right->token = (TOKEN *)calloc(sizeof(TOKEN), 1);
-					e.right->token->value = ",";
+					e.right->token->value = _strdup(",");
 					e.right->token->value_length = 1;
 					e.right->token->class_ = TOKEN_CLASS_COMMA;
 					e.right->token->type = TOKEN_COMMA;
 
 					++(*i);
-					e.right->left = CreateTree(tokens, i);
-					TOKEN *t = (TOKEN *)Array_Get(tokens, *i);
+					e.right->left = CreateTree(tokens, i, false);
+					TOKEN *t = (TOKEN *)ArrayGet(tokens, *i);
 					if (!e.right->left || t->class_ != TOKEN_CLASS_COLON) {
 						printf("error %d:%d: unexpected token (expected ':')\n\t%s\n\t^\n", t->row, t->col, t->value);
 						goto error;
 					}
 
 					++(*i);
-					e.right->right = CreateTree(tokens, i);
+					e.right->right = CreateTree(tokens, i, false);
 					--(*i);
 
-					Array_Push(expression_stack, &e);
+					ArrayPush(&expression_stack, &e);
 				} else {
 					printf("error %d:%d: unexpected token\n\t%s\n\t^\n", token->row, token->col, token->value);
 					goto error;
@@ -132,13 +153,13 @@ TREE *CreateTree(ARRAY *tokens, unsigned int *i) {
 			}
 			case TOKEN_CLASS_UNARY: {
 				TREE e;
-				e.token = token;
+				e.token = CopyToken(token);
 				++(*i);
-				e.left = CreateTree(tokens, i);
+				e.left = CreateTree(tokens, i, false);
 				--(*i);
 				if (!e.left) goto error;
 				e.right = 0;
-				Array_Push(expression_stack, &e);
+				ArrayPush(&expression_stack, &e);
 
 				break;
 			}
@@ -155,61 +176,65 @@ TREE *CreateTree(ARRAY *tokens, unsigned int *i) {
 				}
 
 				TREE e;
-				e.token = token;
+				e.token = CopyToken(token);
 				e.left = (TREE *)malloc(sizeof(TREE));
 				e.left->left = e.left->right = 0;
 
 				e.left->token = (TOKEN *)malloc(sizeof(TOKEN));
 				e.left->token->class_ = TOKEN_CLASS_NUMBER;
 				e.left->token->type = TOKEN_DECIMAL_NUMBER;
-				e.left->token->value = "0";
+				e.left->token->value = _strdup("0");
 				e.left->token->value_length = 1;
 
 				++(*i);
-				e.right = CreateTree(tokens, i);
+				e.right = CreateTree(tokens, i, true);
 				if (!e.right) goto error;
 				--(*i);
-				Array_Push(expression_stack, &e);
+
+				ArrayPush(&expression_stack, &e);
 
 				break;
 			}
 			case TOKEN_CLASS_INC_DEC:
+				if (sign) goto leave;
 				if (token_previous && token_previous->class_ == TOKEN_CLASS_WORD) {
 					*token->value = '>';
 				}
 			case TOKEN_CLASS_BINARY: {
-binary:
+			binary:
 				token->class_ = TOKEN_CLASS_BINARY;
-				while (operator_stack->length > 0 && TOKEN_PRECEDENCE[(*(TOKEN **)Array_Get(operator_stack, operator_stack->length - 1))->type] >= TOKEN_PRECEDENCE[token->type]) {
-					TOKEN *o = (*(TOKEN **)Array_Get(operator_stack, operator_stack->length - 1));
-					if (o->class_ == TOKEN_CLASS_BINARY && expression_stack->length > 1) {
+				while (operator_stack.length > 0 && TOKEN_PRECEDENCE[(*(TOKEN **)ArrayGet(&operator_stack, operator_stack.length - 1))->type] >= TOKEN_PRECEDENCE[token->type]) {
+					TOKEN *o = (*(TOKEN **)ArrayGet(&operator_stack, operator_stack.length - 1));
+					if (o->class_ == TOKEN_CLASS_BINARY && expression_stack.length > 1) {
 						TREE *e1 = (TREE *)malloc(sizeof(TREE));
 						TREE *e2 = (TREE *)malloc(sizeof(TREE));
 
-						Array_Pop(expression_stack, e2);
-						Array_Pop(expression_stack, e1);
+						ArrayPop(&expression_stack, e2);
+						ArrayPop(&expression_stack, e1);
 
 						TREE expression;
-						Array_Pop(operator_stack, &expression.token);
+						ArrayPop(&operator_stack, &expression.token);
+						expression.token = CopyToken(expression.token);
 						expression.left = e1;
 						expression.right = e2;
 
-						Array_Push(expression_stack, &expression);
+						ArrayPush(&expression_stack, &expression);
 					} else {
 						TREE *e = (TREE *)malloc(sizeof(TREE));
 
-						Array_Pop(expression_stack, e);
+						ArrayPop(&expression_stack, e);
 
 						TREE expression;
-						Array_Pop(operator_stack, &expression.token);
+						ArrayPop(&operator_stack, &expression.token);
+						expression.token = CopyToken(expression.token);
 						expression.left = e;
 						expression.right = 0;
 
-						Array_Push(expression_stack, &expression);
+						ArrayPush(&expression_stack, &expression);
 					}
 				}
 
-				Array_Push(operator_stack, &token);
+				ArrayPush(&operator_stack, &token);
 
 				break;
 			}
@@ -224,7 +249,7 @@ binary:
 					while ((n = strchr(s, '.'))) {
 						e->token = (TOKEN *)calloc(sizeof(TOKEN), 1);
 						e->token->type = TOKEN_WORD;
-						e->token->value_length = n - s;
+						e->token->value_length = (unsigned int)((SINT)n - (SINT)s);
 						e->token->value = (char *)calloc(e->token->value_length + 1, 1);
 						memcpy(e->token->value, s, e->token->value_length);
 						e = (e->left = (TREE *)calloc(sizeof(TREE), 1));
@@ -234,42 +259,41 @@ binary:
 
 					e->token = (TOKEN *)calloc(sizeof(TOKEN), 1);
 					e->token->type = TOKEN_WORD;
-					e->token->value_length = strlen(s);
-					e->token->value = (char *)calloc(e->token->value_length + 1, 1);
-					memcpy(e->token->value, s, e->token->value_length);
+					e->token->value_length = (unsigned int)strlen(s);
+					e->token->value = _strdup(s);
 				} else {
-					expression.token = token;
+					expression.token = CopyToken(token);
 				}
 
-				Array_Push(expression_stack, &expression);
+				ArrayPush(&expression_stack, &expression);
 
 				break;
 			}
 			case TOKEN_CLASS_NUMBER: case TOKEN_CLASS_STRING: {
 				TREE expression;
-				expression.token = token;
+				expression.token = CopyToken(token);
 				expression.left = expression.right = 0;
 
-				Array_Push(expression_stack, &expression);
+				ArrayPush(&expression_stack, &expression);
 
 				break;
 			}
 			case TOKEN_CLASS_OBRACKET: {
-				if (((TOKEN *)Array_Get(tokens, *i + 1))->type == TOKEN_CLOSE_BRACKET) {
+				if (((TOKEN *)ArrayGet(tokens, *i + 1))->type == TOKEN_CLOSE_BRACKET) {
 					TREE expression;
 					token->type = TOKEN_ARRAY;
-					expression.token = token;
+					expression.token = CopyToken(token);
 					expression.left = expression.right = 0;
 
-					Array_Push(expression_stack, &expression);
+					ArrayPush(&expression_stack, &expression);
 
 					++(*i);
 				} else {
 					TREE e;
 					token->type = TOKEN_ARRAY;
-					e.token = token;
+					e.token = CopyToken(token);
 					++(*i);
-					e.left = CreateTree(tokens, i);
+					e.left = CreateTree(tokens, i, false);
 					--(*i);
 					if (!e.left) goto error;
 					e.right = 0;
@@ -277,24 +301,24 @@ binary:
 					TREE *arg = &e;
 					unsigned int c = 1;
 					while (c > 0) {
-						token = (TOKEN *)Array_Get(tokens, ++(*i));
+						token = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (token->type == TOKEN_OPEN_BRACKET) {
 							++c;
 						} else if (token->type == TOKEN_CLOSE_BRACKET) {
 							--c;
 						} else if (token->type == TOKEN_COMMA) {
-							arg = (arg->right = (TREE *)malloc(sizeof(TREE)));
+							arg = (arg->right = (TREE *)calloc(sizeof(TREE), 1));
 
-							arg->token = token;
+							arg->token = CopyToken(token);
 							++(*i);
-							arg->left = CreateTree(tokens, i);
+							arg->left = CreateTree(tokens, i, false);
 							--(*i);
 							if (!arg->left) goto error;
 							arg->right = 0;
 						}
 					}
 
-					Array_Push(expression_stack, &e);
+					ArrayPush(&expression_stack, &e);
 				}
 
 				break;
@@ -308,10 +332,10 @@ binary:
 						}
 
 						TREE func;
-						func.token = token;
+						func.token = CopyToken(token);
 						func.left = func.right = 0;
 
-						TOKEN *t = (TOKEN *)Array_Get(tokens, ++(*i));
+						TOKEN *t = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (t->type != TOKEN_OPEN_PAREN) {
 							printf("error %d:%d: unexpected token (expected '(')\n\t%s\n\t^\n", t->row, t->col, t->value);
 							goto error;
@@ -319,7 +343,7 @@ binary:
 
 						TREE *arg = &func;
 						while (t->type != TOKEN_CLOSE_PAREN) {
-							t = (TOKEN *)Array_Get(tokens, ++(*i));
+							t = (TOKEN *)ArrayGet(tokens, ++(*i));
 							if (t->type == TOKEN_CLOSE_PAREN) {
 								break;
 							} else if (t->class_ != TOKEN_CLASS_WORD) {
@@ -328,26 +352,26 @@ binary:
 							}
 
 							arg = (arg->left = (TREE *)malloc(sizeof(TREE)));
-							arg->token = t;
+							arg->token = CopyToken(t);
 							arg->left = arg->right = 0;
 
-							t = (TOKEN *)Array_Get(tokens, ++(*i));
+							t = (TOKEN *)ArrayGet(tokens, ++(*i));
 							if (t->type != TOKEN_COMMA && t->type != TOKEN_CLOSE_PAREN) {
 								printf("error %d:%d: unexpected token (expected ',' or ')')\n\t%s\n\t^\n", t->row, t->col, t->value);
 								goto error;
 							}
 						}
 
-						t = (TOKEN *)Array_Get(tokens, ++(*i));
+						t = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (t->type != TOKEN_OPEN_BRACE) {
 							printf("error %d:%d: unexpected token (expected '{')\n\t%s\n\t^\n", t->row, t->col, t->value);
 							goto error;
 						}
 
-						t = (TOKEN *)Array_Get(tokens, ++(*i));
+						t = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (t->type != TOKEN_CLOSE_BRACE) {
 							TOKEN *comma = (TOKEN *)calloc(sizeof(TOKEN), 1);
-							comma->value = ",";
+							comma->value = _strdup(",");
 							comma->value_length = 1;
 							comma->class_ = TOKEN_CLASS_COMMA;
 							comma->type = TOKEN_COMMA;
@@ -355,16 +379,16 @@ binary:
 							TREE *statement = &func;
 							for (;;) {
 								statement = (statement->right = (TREE *)calloc(sizeof(TREE), 1));
-								statement->token = comma;
-								statement->left = CreateTree(tokens, i);
+								statement->token = CopyToken(comma);
+								statement->left = CreateTree(tokens, i, false);
 
-								t = (TOKEN *)Array_Get(tokens, *i);
+								t = (TOKEN *)ArrayGet(tokens, *i);
 								if (t->type == TOKEN_CLOSE_BRACE || t->type == TOKEN_SEMICOLON) {
 									if (!statement->left) {
 										break;
 									}
 
-									t = (TOKEN *)Array_Get(tokens, ++(*i));
+									t = (TOKEN *)ArrayGet(tokens, ++(*i));
 									if (t->type == TOKEN_CLOSE_BRACE || t->type == TOKEN_SEMICOLON) {
 										break;
 									}
@@ -377,10 +401,12 @@ binary:
 
 								break;
 							}
+
+							FreeToken(comma);
 						}
 
-						t = (TOKEN *)Array_Get(tokens, *i);
-						Array_Push(expression_stack, &func);
+						t = (TOKEN *)ArrayGet(tokens, *i);
+						ArrayPush(&expression_stack, &func);
 
 						goto leave;
 					}
@@ -392,59 +418,59 @@ binary:
 
 						TOKEN *if_ = token;
 
-						TOKEN *t = (TOKEN *)Array_Get(tokens, ++(*i));
+						TOKEN *t = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (t->type != TOKEN_OPEN_PAREN) {
 							printf("error %d:%d: unexpected token (expected '(')\n\t%s\n\t^\n", t->row, t->col, t->value);
 							goto error;
 						}
 
-						t = (TOKEN *)Array_Get(tokens, ++(*i));
+						t = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (t->type == TOKEN_CLOSE_PAREN) {
 							printf("error %d:%d: expected an expression\n\t%s\n\t^\n", t->row, t->col, t->value);
 							goto error;
 						}
 
 						TOKEN *comma = (TOKEN *)calloc(sizeof(TOKEN), 1);
-						comma->value = ",";
+						comma->value = _strdup(",");
 						comma->value_length = 1;
 						comma->class_ = TOKEN_CLASS_COMMA;
 						comma->type = TOKEN_COMMA;
 
 						TREE expression;
-						expression.token = token;
+						expression.token = CopyToken(token);
 						expression.left = (TREE *)calloc(sizeof(TREE), 1);
-						expression.left->token = comma;
-						expression.left->left = CreateTree(tokens, i);
+						expression.left->token = CopyToken(comma);
+						expression.left->left = CreateTree(tokens, i, false);
 						if (!expression.left->left) goto error;
 						expression.right = 0;
 
-						t = (TOKEN *)Array_Get(tokens, *i);
+						t = (TOKEN *)ArrayGet(tokens, *i);
 						if (t->type != TOKEN_CLOSE_PAREN) {
 							printf("error %d:%d: unexpected token (expected ')')\n\t%s\n\t^\n", t->row, t->col, t->value);
 							goto error;
 						}
 
-						t = (TOKEN *)Array_Get(tokens, ++(*i));
+						t = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (t->type != TOKEN_OPEN_BRACE) {
 							printf("error %d:%d: unexpected token (expected '{')\n\t%s\n\t^\n", t->row, t->col, t->value);
 							goto error;
 						}
 
-						t = (TOKEN *)Array_Get(tokens, ++(*i));
+						t = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (t->type != TOKEN_CLOSE_BRACE) {
 							TREE *statement = expression.left;
 							for (;;) {
 								statement = (statement->right = (TREE *)calloc(sizeof(TREE), 1));
-								statement->token = comma;
-								statement->left = CreateTree(tokens, i);
+								statement->token = CopyToken(comma);
+								statement->left = CreateTree(tokens, i, false);
 
-								t = (TOKEN *)Array_Get(tokens, *i);
+								t = (TOKEN *)ArrayGet(tokens, *i);
 								if (t->type == TOKEN_CLOSE_BRACE || t->type == TOKEN_SEMICOLON) {
 									if (!statement->left) {
 										break;
 									}
 
-									t = (TOKEN *)Array_Get(tokens, ++(*i));
+									t = (TOKEN *)ArrayGet(tokens, ++(*i));
 									if (t->type == TOKEN_CLOSE_BRACE || t->type == TOKEN_SEMICOLON) {
 										break;
 									}
@@ -460,12 +486,12 @@ binary:
 						}
 
 						if (*i + 1 < tokens->length) {
-							t = (TOKEN *)Array_Get(tokens, *i + 1);
+							t = (TOKEN *)ArrayGet(tokens, *i + 1);
 							if (t->type == TOKEN_ELSE_IF || t->type == TOKEN_ELSE) {
 								++(*i);
 								TREE *block = &expression;
 
-								for (;; t = (TOKEN *)Array_Get(tokens, ++(*i))) {
+								for (;; t = (TOKEN *)ArrayGet(tokens, ++(*i))) {
 									if (t->type == TOKEN_ELSE_IF) {
 										if (*i + 4 >= tokens->length) {
 											puts("error: unexepcted end of input");
@@ -474,52 +500,52 @@ binary:
 
 										TOKEN *elseif = t;
 
-										t = (TOKEN *)Array_Get(tokens, ++(*i));
+										t = (TOKEN *)ArrayGet(tokens, ++(*i));
 										if (t->type != TOKEN_OPEN_PAREN) {
 											printf("error %d:%d: unexpected token (expected '(')\n\t%s\n\t^\n", t->row, t->col, t->value);
 											goto error;
 										}
 
-										t = (TOKEN *)Array_Get(tokens, ++(*i));
+										t = (TOKEN *)ArrayGet(tokens, ++(*i));
 										if (t->type == TOKEN_CLOSE_PAREN) {
 											printf("error %d:%d: expected an expression\n\t%s\n\t^\n", t->row, t->col, t->value);
 											goto error;
 										}
 
 										TREE *expression = (TREE *)calloc(sizeof(TREE), 1);
-										expression->token = elseif;
+										expression->token = CopyToken(elseif);
 										expression->left = (TREE *)calloc(sizeof(TREE), 1);
-										expression->left->token = comma;
-										expression->left->left = CreateTree(tokens, i);
+										expression->left->token = CopyToken(comma);
+										expression->left->left = CreateTree(tokens, i, false);
 										if (!expression->left->left) goto error;
 
-										t = (TOKEN *)Array_Get(tokens, *i);
+										t = (TOKEN *)ArrayGet(tokens, *i);
 										if (t->type != TOKEN_CLOSE_PAREN) {
 											printf("error %d:%d: unexpected token (expected ')')\n\t%s\n\t^\n", t->row, t->col, t->value);
 											goto error;
 										}
 
-										t = (TOKEN *)Array_Get(tokens, ++(*i));
+										t = (TOKEN *)ArrayGet(tokens, ++(*i));
 										if (t->type != TOKEN_OPEN_BRACE) {
 											printf("error %d:%d: unexpected token (expected '{')\n\t%s\n\t^\n", t->row, t->col, t->value);
 											goto error;
 										}
 
-										t = (TOKEN *)Array_Get(tokens, ++(*i));
+										t = (TOKEN *)ArrayGet(tokens, ++(*i));
 										if (t->type != TOKEN_CLOSE_BRACE) {
 											TREE *statement = expression->left;
 											for (;;) {
 												statement = (statement->right = (TREE *)calloc(sizeof(TREE), 1));
-												statement->token = comma;
-												statement->left = CreateTree(tokens, i);
+												statement->token = CopyToken(comma);
+												statement->left = CreateTree(tokens, i, false);
 
-												t = (TOKEN *)Array_Get(tokens, *i);
+												t = (TOKEN *)ArrayGet(tokens, *i);
 												if (t->type == TOKEN_CLOSE_BRACE || t->type == TOKEN_SEMICOLON) {
 													if (!statement->left) {
 														break;
 													}
 
-													t = (TOKEN *)Array_Get(tokens, ++(*i));
+													t = (TOKEN *)ArrayGet(tokens, ++(*i));
 													if (t->type == TOKEN_CLOSE_BRACE || t->type == TOKEN_SEMICOLON) {
 														--(*i);
 														break;
@@ -544,30 +570,30 @@ binary:
 
 										TOKEN *else_ = t;
 
-										t = (TOKEN *)Array_Get(tokens, ++(*i));
+										t = (TOKEN *)ArrayGet(tokens, ++(*i));
 										if (t->type != TOKEN_OPEN_BRACE) {
 											printf("error %d:%d: unexpected token (expected '{')\n\t%s\n\t^\n", t->row, t->col, t->value);
 											goto error;
 										}
 
 										TREE *expression = (TREE *)calloc(sizeof(TREE), 1);
-										expression->token = else_;
+										expression->token = CopyToken(else_);
 
-										t = (TOKEN *)Array_Get(tokens, ++(*i));
+										t = (TOKEN *)ArrayGet(tokens, ++(*i));
 										if (t->type != TOKEN_CLOSE_BRACE) {
 											TREE *statement = expression;
 											for (;;) {
 												statement = (statement->right = (TREE *)calloc(sizeof(TREE), 1));
-												statement->token = comma;
-												statement->left = CreateTree(tokens, i);
+												statement->token = CopyToken(comma);
+												statement->left = CreateTree(tokens, i, false);
 
-												t = (TOKEN *)Array_Get(tokens, *i);
+												t = (TOKEN *)ArrayGet(tokens, *i);
 												if (t->type == TOKEN_CLOSE_BRACE || t->type == TOKEN_SEMICOLON) {
 													if (!statement->left) {
 														break;
 													}
 
-													t = (TOKEN *)Array_Get(tokens, ++(*i));
+													t = (TOKEN *)ArrayGet(tokens, ++(*i));
 													if (t->type == TOKEN_CLOSE_BRACE || t->type == TOKEN_SEMICOLON) {
 														--(*i);
 														break;
@@ -592,7 +618,8 @@ binary:
 							}
 						}
 
-						Array_Push(expression_stack, &expression);
+						FreeToken(comma);
+						ArrayPush(&expression_stack, &expression);
 
 						goto leave;
 					}
@@ -608,36 +635,36 @@ binary:
 							goto error;
 						}
 
-						TOKEN *for_ = (TOKEN *)Array_Get(tokens, *i);
-						TOKEN *t = (TOKEN *)Array_Get(tokens, ++(*i));
+						TOKEN *for_ = (TOKEN *)ArrayGet(tokens, *i);
+						TOKEN *t = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (t->type != TOKEN_OPEN_PAREN) {
 							printf("error %d:%d: unexpected token (expected '(')\n\t%s\n\t^\n", t->row, t->col, t->value);
 							goto error;
 						}
 
-						t = (TOKEN *)Array_Get(tokens, ++(*i));
+						t = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (t->type == TOKEN_CLOSE_PAREN) {
 							printf("error %d:%d: expected an expression\n\t%s\n\t^\n", t->row, t->col, t->value);
 							goto error;
 						}
 
 						TOKEN *comma = (TOKEN *)calloc(sizeof(TOKEN), 1);
-						comma->value = ",";
+						comma->value = _strdup(",");
 						comma->value_length = 1;
 						comma->class_ = TOKEN_CLASS_COMMA;
 						comma->type = TOKEN_COMMA;
 
 						TREE expression;
-						expression.token = for_;
+						expression.token = CopyToken(for_);
 						expression.left = (TREE *)calloc(sizeof(TREE), 1);
 						expression.right = 0;
 
 						TREE *statement = expression.left;
-						while ((t = (TOKEN *)Array_Get(tokens, *i))->type != TOKEN_SEMICOLON) {
-							statement->token = comma;
-							statement->left = CreateTree(tokens, i);
+						while ((t = (TOKEN *)ArrayGet(tokens, *i))->type != TOKEN_SEMICOLON) {
+							statement->token = CopyToken(comma);
+							statement->left = CreateTree(tokens, i, false);
 
-							t = (TOKEN *)Array_Get(tokens, *i);
+							t = (TOKEN *)ArrayGet(tokens, *i);
 							if (t->type == TOKEN_COMMA) {
 								statement = (statement->right = (TREE *)calloc(sizeof(TREE), 1));
 								++(*i);
@@ -654,13 +681,13 @@ binary:
 						}
 
 						statement = (expression.right = (TREE *)calloc(sizeof(TREE), 1));
-						statement->token = comma;
+						statement->token = CopyToken(comma);
 
-						t = (TOKEN *)Array_Get(tokens, ++(*i));
+						t = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (t->type != TOKEN_SEMICOLON) {
-							statement->left = CreateTree(tokens, i);
+							statement->left = CreateTree(tokens, i, false);
 
-							t = (TOKEN *)Array_Get(tokens, *i);
+							t = (TOKEN *)ArrayGet(tokens, *i);
 							if (t->type != TOKEN_SEMICOLON) {
 								printf("error %d:%d: unexpected token (expected ';')\n\t%s\n\t^\n", t->row, t->col, t->value);
 								goto error;
@@ -670,15 +697,14 @@ binary:
 						++(*i);
 
 						statement = (statement->right = (TREE *)calloc(sizeof(TREE), 1));
-						statement->token = comma;
+						statement->token = CopyToken(comma);
 						statement->left = (TREE *)calloc(sizeof(TREE), 1);
-						statement->token = comma;
 						statement = statement->left;
-						while ((t = (TOKEN *)Array_Get(tokens, *i))->type != TOKEN_CLOSE_PAREN) {
-							statement->token = comma;
-							statement->left = CreateTree(tokens, i);
+						while ((t = (TOKEN *)ArrayGet(tokens, *i))->type != TOKEN_CLOSE_PAREN) {
+							statement->token = CopyToken(comma);
+							statement->left = CreateTree(tokens, i, false);
 
-							t = (TOKEN *)Array_Get(tokens, *i);
+							t = (TOKEN *)ArrayGet(tokens, *i);
 							if (t->type == TOKEN_COMMA) {
 								statement = (statement->right = (TREE *)calloc(sizeof(TREE), 1));
 								++(*i);
@@ -690,29 +716,29 @@ binary:
 						}
 
 						TREE *block = expression.right->right;
-						block->token = comma;
+						block->token = CopyToken(comma);
 
-						t = (TOKEN *)Array_Get(tokens, ++(*i));
+						t = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (t->type != TOKEN_OPEN_BRACE) {
 							printf("error %d:%d: unexpected token (expected '{')\n\t%s\n\t^\n", t->row, t->col, t->value);
 							goto error;
 						}
 
-						t = (TOKEN *)Array_Get(tokens, ++(*i));
+						t = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (t->type != TOKEN_CLOSE_BRACE) {
 							TREE *statement = block;
 							for (;;) {
 								statement = (statement->right = (TREE *)calloc(sizeof(TREE), 1));
-								statement->token = comma;
-								statement->left = CreateTree(tokens, i);
+								statement->token = CopyToken(comma);
+								statement->left = CreateTree(tokens, i, false);
 
-								t = (TOKEN *)Array_Get(tokens, *i);
+								t = (TOKEN *)ArrayGet(tokens, *i);
 								if (t->type == TOKEN_CLOSE_BRACE || t->type == TOKEN_SEMICOLON) {
 									if (!statement->left) {
 										break;
 									}
 
-									t = (TOKEN *)Array_Get(tokens, ++(*i));
+									t = (TOKEN *)ArrayGet(tokens, ++(*i));
 									if (t->type == TOKEN_CLOSE_BRACE || t->type == TOKEN_SEMICOLON) {
 										break;
 									}
@@ -727,7 +753,8 @@ binary:
 							}
 						}
 
-						Array_Push(expression_stack, &expression);
+						FreeToken(comma);
+						ArrayPush(&expression_stack, &expression);
 
 						goto leave;
 					}
@@ -739,50 +766,50 @@ binary:
 
 						TOKEN *while_ = token;
 
-						TOKEN *t = (TOKEN *)Array_Get(tokens, ++(*i));
+						TOKEN *t = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (t->type != TOKEN_OPEN_PAREN) {
 							printf("error %d:%d: unexpected token (expected '(')\n\t%s\n\t^\n", t->row, t->col, t->value);
 							goto error;
 						}
 
-						t = (TOKEN *)Array_Get(tokens, ++(*i));
+						t = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (t->type == TOKEN_CLOSE_PAREN) {
 							printf("error %d:%d: expected an expression\n\t%s\n\t^\n", t->row, t->col, t->value);
 							goto error;
 						}
 
 						TREE expression;
-						expression.token = while_;
-						expression.left = CreateTree(tokens, i);
+						expression.token = CopyToken(while_);
+						expression.left = CreateTree(tokens, i, false);
 						expression.right = 0;
 
-						t = (TOKEN *)Array_Get(tokens, *i);
+						t = (TOKEN *)ArrayGet(tokens, *i);
 						if (t->type != TOKEN_CLOSE_PAREN) {
 							printf("error %d:%d: unexpected token (expected ')')\n\t%s\n\t^\n", t->row, t->col, t->value);
 							goto error;
 						}
 
 						TOKEN *comma = (TOKEN *)calloc(sizeof(TOKEN), 1);
-						comma->value = ",";
+						comma->value = _strdup(",");
 						comma->value_length = 1;
 						comma->class_ = TOKEN_CLASS_COMMA;
 						comma->type = TOKEN_COMMA;
 
-						t = (TOKEN *)Array_Get(tokens, ++(*i));
+						t = (TOKEN *)ArrayGet(tokens, ++(*i));
 						if (t->type != TOKEN_CLOSE_BRACE) {
 							TREE *statement = &expression;
 							for (;;) {
 								statement = (statement->right = (TREE *)calloc(sizeof(TREE), 1));
-								statement->token = comma;
-								statement->left = CreateTree(tokens, i);
+								statement->token = CopyToken(comma);
+								statement->left = CreateTree(tokens, i, false);
 
-								t = (TOKEN *)Array_Get(tokens, *i);
+								t = (TOKEN *)ArrayGet(tokens, *i);
 								if (t->type == TOKEN_CLOSE_BRACE || t->type == TOKEN_SEMICOLON) {
 									if (!statement->left) {
 										break;
 									}
 
-									t = (TOKEN *)Array_Get(tokens, ++(*i));
+									t = (TOKEN *)ArrayGet(tokens, ++(*i));
 									if (t->type == TOKEN_CLOSE_BRACE || t->type == TOKEN_SEMICOLON) {
 										break;
 									}
@@ -797,9 +824,9 @@ binary:
 							}
 						}
 
-						Array_Push(expression_stack, &expression);
+						ArrayPush(&expression_stack, &expression);
 
-						break;
+						goto leave;
 					}
 					case TOKEN_BREAK: {
 						if (*i + 1 >= tokens->length) {
@@ -807,17 +834,17 @@ binary:
 							goto error;
 						}
 
-						TREE e;
-						e.token = token;
+						TREE e = { 0 };
+						e.token = CopyToken(token);
 						e.left = e.right = 0;
 
-						TOKEN *t = (TOKEN *)Array_Get(tokens, *i + 1);
+						TOKEN *t = (TOKEN *)ArrayGet(tokens, *i + 1);
 						if (t->type != TOKEN_SEMICOLON) {
 							printf("error %d:%d: unexpected token (expected ';')\n\t%s\n\t^\n", t->row, t->col, t->value);
 							goto error;
 						}
 
-						Array_Push(expression_stack, &e);
+						ArrayPush(&expression_stack, &e);
 
 						break;
 					}
@@ -828,27 +855,44 @@ binary:
 						}
 
 						TREE e;
-						e.token = token;
+						e.token = CopyToken(token);
 						e.left = e.right = 0;
 
-						TOKEN *t = (TOKEN *)Array_Get(tokens, *i + 1);
+						TOKEN *t = (TOKEN *)ArrayGet(tokens, *i + 1);
 						if (t->type != TOKEN_SEMICOLON) {
 							++(*i);
-							e.left = CreateTree(tokens, i);
+							e.left = CreateTree(tokens, i, false);
 
-							t = (TOKEN *)Array_Get(tokens, *i);
+							t = (TOKEN *)ArrayGet(tokens, *i);
 							if (t->type != TOKEN_SEMICOLON) {
 								printf("error %d:%d: unexpected token (expected ';')\n\t%s\n\t^\n", t->row, t->col, t->value);
 								goto error;
 							}
 						}
 
-						Array_Push(expression_stack, &e);
+						ArrayPush(&expression_stack, &e);
 
 						goto leave;
 					}
 				}
 
+				break;
+			}
+			case TOKEN_CLASS_ACCESSOR: {
+				TREE *e1 = (TREE *)malloc(sizeof(TREE));
+				ArrayPop(&expression_stack, e1);
+
+				TREE e = { 0 };
+				e.token = CopyToken(token);
+				e.left = e1;
+				++(*i);
+				e.right = CreateTree(tokens, i, false);
+				--(*i);
+				if (!e.right) {
+					goto error;
+				}
+				
+				ArrayPush(&expression_stack, &e);
 				break;
 			}
 		}
@@ -857,49 +901,51 @@ binary:
 	}
 
 leave:
-	while (operator_stack->length > 0) {
-		TOKEN *o = (*(TOKEN **)Array_Get(operator_stack, operator_stack->length - 1));
-		if (o->class_ == TOKEN_CLASS_BINARY && expression_stack->length > 1) {
+	while (operator_stack.length > 0) {
+		TOKEN *o = (*(TOKEN **)ArrayGet(&operator_stack, operator_stack.length - 1));
+		if (o->class_ == TOKEN_CLASS_BINARY && expression_stack.length > 1) {
 			TREE *e1 = (TREE *)malloc(sizeof(TREE));
 			TREE *e2 = (TREE *)malloc(sizeof(TREE));
 
-			Array_Pop(expression_stack, e2);
-			Array_Pop(expression_stack, e1);
+			ArrayPop(&expression_stack, e2);
+			ArrayPop(&expression_stack, e1);
 
 			TREE expression;
-			Array_Pop(operator_stack, &expression.token);
+			ArrayPop(&operator_stack, &expression.token);
+			expression.token = CopyToken(expression.token);
 			expression.left = e1;
 			expression.right = e2;
 
-			Array_Push(expression_stack, &expression);
+			ArrayPush(&expression_stack, &expression);
 		} else {
 			TREE *e = (TREE *)malloc(sizeof(TREE));
 
-			Array_Pop(expression_stack, e);
+			ArrayPop(&expression_stack, e);
 
 			TREE expression;
-			Array_Pop(operator_stack, &expression.token);
+			ArrayPop(&operator_stack, &expression.token);
+			expression.token = CopyToken(expression.token);
 			expression.left = e;
 			expression.right = 0;
 
-			Array_Push(expression_stack, &expression);
+			ArrayPush(&expression_stack, &expression);
 		}
 	}
 
-	Array_Free(operator_stack);
-	if (expression_stack->length > 0) {
+	ArrayFree(&operator_stack);
+	if (expression_stack.length > 0) {
 		TREE *ret = (TREE *)malloc(sizeof(TREE));
-		Array_Pop(expression_stack, ret);
-		Array_Free(expression_stack);
+		ArrayPop(&expression_stack, ret);
+		ArrayFree(&expression_stack);
 		return ret;
 	} else {
-		Array_Free(expression_stack);
+		ArrayFree(&expression_stack);
 		return 0;
 	}
 
 error:
-	Array_Free(operator_stack);
-	Array_Free(expression_stack);
+	ArrayFree(&operator_stack);
+	ArrayFree(&expression_stack);
 	return 0;
 }
 
@@ -911,10 +957,9 @@ TREE *CopyTree(TREE *tree) {
 	TREE *copy = (TREE *)calloc(sizeof(TREE), 1);
 
 	if (tree && tree->token) {
-		copy->token = (TOKEN *)calloc(sizeof(TOKEN), 1);
+		copy->token = (TOKEN *)malloc(sizeof(TOKEN));
 		memcpy(copy->token, tree->token, sizeof(TOKEN));
-		copy->token->value = (char *)calloc(copy->token->value_length + 1, 1);
-		memcpy(copy->token->value, tree->token->value, copy->token->value_length);
+		copy->token->value = _strdup(tree->token->value);
 
 		if (tree->left) {
 			copy->left = CopyTree(tree->left);
@@ -928,18 +973,22 @@ TREE *CopyTree(TREE *tree) {
 }
 
 void FreeTree(TREE *tree) {
-	if (tree->left) {
-		FreeTree(tree->left);
-	}
-	if (tree->right) {
-		FreeTree(tree->right);
-	}
-
-	if (tree->token) {
-		if (tree->token->value) {
-			free(tree->token->value);
+	if (tree) {
+		if (tree->left) {
+			FreeTree(tree->left);
 		}
-		free(tree->token);
+		if (tree->right) {
+			FreeTree(tree->right);
+		}
+
+		if (tree->token) {
+			if (tree->token->value) {
+				free(tree->token->value);
+			}
+			free(tree->token);
+		}
+
+		free(tree);
 	}
 }
 

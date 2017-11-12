@@ -1,11 +1,11 @@
 #include "main.h"
 
-ARRAY *GetTokens(char *s) {
+ARRAY GetTokens(char *s) {
 	static unsigned int token_count = sizeof(SYNTAX_TOKENS) / sizeof(SYNTAX_TOKENS[0]);
 
 	for (unsigned int i = 0; i < token_count; ++i) {
 		if (SYNTAX_TOKENS[i].type != SYNTAX_TOKEN_REGEX) {
-			SYNTAX_TOKENS[i].length = strlen(SYNTAX_TOKENS[i].expression);
+			SYNTAX_TOKENS[i].length = (unsigned int)strlen(SYNTAX_TOKENS[i].expression);
 		}
 	}
 
@@ -13,7 +13,7 @@ ARRAY *GetTokens(char *s) {
 	char *start = s;
 
 	int length;
-	ARRAY *tokens = Array_New(sizeof(TOKEN));
+	ARRAY tokens = ArrayNew(sizeof(TOKEN));
 	SYNTAX_TOKEN *syntax_token;
 	int previous_class = TOKEN_CLASS_INIT;
 
@@ -40,7 +40,7 @@ ARRAY *GetTokens(char *s) {
 						*end = 0;
 					}
 
-					unsigned int col = s - start;
+					unsigned int col = (unsigned int)((SINT)s - (SINT)start);
 					printf("error %d:%d: unexpected token\n\t%s\n\t%*s^\n", row, col + 1, start, col, "");
 
 					goto error;
@@ -61,7 +61,7 @@ ARRAY *GetTokens(char *s) {
 						*end = 0;
 					}
 
-					unsigned int col = s - start;
+					unsigned int col = (unsigned int)((SINT)s - (SINT)start);
 					printf("error %d:%d: unexpected token\n\t%s\n\t%*s^\n", row, col + 1, start, col, "");
 
 					goto error;
@@ -78,7 +78,7 @@ ARRAY *GetTokens(char *s) {
 						*end = 0;
 					}
 
-					unsigned int col = s - start;
+					unsigned int col = (unsigned int)((SINT)s - (SINT)start);
 					printf("error %d:%d: unexpected token\n\t%s\n\t%*s^\n", row, col + 1, start, col, "");
 
 					goto error;
@@ -121,7 +121,7 @@ ARRAY *GetTokens(char *s) {
 				*end = 0;
 			}
 
-			unsigned int col = s - start;
+			unsigned int col = (unsigned int)((SINT)s - (SINT)start);
 			printf("error %d:%d: unexpected character\n\t%s\n\t%*s^\n", row, col + 1, start, col, "");
 
 			goto error;
@@ -134,7 +134,7 @@ ARRAY *GetTokens(char *s) {
 					*end = 0;
 				}
 
-				unsigned int col = s - start;
+				unsigned int col = (unsigned int)((SINT)s - (SINT)start);
 				printf("error %d:%d: unexpected token\n\t%s\n\t%*s^\n", row, col + 1, start, col, "");
 
 				goto error;
@@ -148,13 +148,13 @@ ARRAY *GetTokens(char *s) {
 			token.type = syntax_token->token_type;
 			token.class_ = syntax_token->token_class;
 			token.row = row;
-			token.col = s - start + 1;
+			token.col = (unsigned int)((SINT)s - (SINT)start + 1);
 
 			if (token.type == TOKEN_FOR) {
 				for_ = 1;
 			}
 
-			Array_Push(tokens, &token);
+			ArrayPush(&tokens, &token);
 		}
 
 		s += length;
@@ -168,8 +168,8 @@ ARRAY *GetTokens(char *s) {
 	return tokens;
 
 error:
-	Array_Free(tokens);
-	return 0;
+	ArrayFree(&tokens);
+	return{ 0 };
 }
 
 int match(char *string_, char *regex_) {
@@ -177,7 +177,7 @@ int match(char *string_, char *regex_) {
 	regex r(regex_);
 
 	if (regex_search((const char *)string_, (const char *)strchr(string_, 0), m, r) && m.position() == 0) {
-		return m.length();
+		return (int)m.length();
 	}
 
 	return 0;

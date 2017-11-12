@@ -1,59 +1,53 @@
 #include "main.h"
 
-// Creates a new array with size of element
-ARRAY *Array_New(unsigned char element_size) {
-	ARRAY *array = (ARRAY *)malloc(sizeof(ARRAY));
+ARRAY ArrayNew(unsigned char element_size) {
+	ARRAY array;
 
-	array->element_size = element_size;
-	array->length = 0;
-	array->_allocated = 0xFF;
-	array->buffer = (char *)malloc(array->_allocated * element_size);
+	array.element_size = element_size;
+	array.allocated = 0xFF;
+	array.buffer = malloc(element_size * 0xFF);
+	array.length = 0;
 
 	return array;
 }
 
-// Pushes an element to the end of an array and returns the element
-void *Array_Push(ARRAY *array, void *element) {
-	if (array->length >= array->_allocated) {
-		array->_allocated *= 2;
-		array->buffer = (char *)realloc(array->buffer, array->_allocated * array->element_size);
-	}
-
-	return ARRAY_SET(array, array->length++, element);
+void *ArrayGet(ARRAY *array, DWORD index) {
+	return (void *)((SINT)array->buffer + (index * array->element_size));
 }
 
-// Removes and gets the last element of an array
-void Array_Pop(ARRAY *array, void *element_out) {
-	if (array->length > 0) {
-		if (element_out) {
-			memcpy(element_out, ARRAY_GET(array, --array->length), array->element_size);
-		} else {
-			--array->length;
-		}
+void *ArraySet(ARRAY *array, DWORD index, void *element) {
+	return memcpy((void *)((SINT)array->buffer + (index * array->element_size)), element, array->element_size);
+}
+
+void *ArrayPush(ARRAY *array, void *element) {
+	if (array->length >= array->allocated) {
+		array->allocated *= 2;
+		array->buffer = realloc(array->buffer, array->allocated * array->element_size);
+	}
+
+	return memcpy((void *)((SINT)array->buffer + (array->length++ * array->element_size)), element, array->element_size);
+}
+
+void ArrayPop(ARRAY *array, void *out) {
+	if (out) {
+		memcpy(out, ArrayGet(array, --array->length), array->element_size);
+	} else {
+		--array->length;
 	}
 }
 
-// Sets an element at a specific index in an array
-void *Array_Set(ARRAY *array, unsigned int index, void *element) {
-	if (index >= array->_allocated) {
-		array->_allocated = index + 1;
-		array->buffer = (char *)realloc(array->buffer, array->_allocated * array->element_size);
-	}
+void ArrayMerge(ARRAY *dest, ARRAY *array) {
+	dest->allocated += array->allocated;
+	dest->buffer = realloc(dest->buffer, dest->allocated * array->element_size);
 
-	if (index >= array->length) {
-		array->length = index + 1;
-	}
+	memcpy((void *)((SINT)dest->buffer + (dest->length * dest->element_size)), array->buffer, array->length * dest->element_size);
 
-	return ARRAY_SET(array, index, element);
+	dest->length += array->length;
 }
 
-// Returns an element at a specific index in an array
-void *Array_Get(ARRAY *array, unsigned int index) {
-	return ARRAY_GET(array, index);
-}
-
-// Frees an array from memory
-void Array_Free(ARRAY *array) {
-	free(array->buffer);
-	free(array);
+void ArrayFree(ARRAY *array) {
+	if (array->buffer) {
+		free(array->buffer);
+		array->buffer = 0;
+	}
 }

@@ -1,17 +1,17 @@
 strings = [ "\"", '\'', "\xE1", "new\nline", "\\n", "\ttab" ];
 
-for (i := 0; i < length(strings); ++i) {
-	Console.println(get(strings, i));
+for (i := 0; i < strings.length(); ++i) {
+	Console.println(strings.get(i));
 }
 
 /* Expected output:
 
-"""
-"'"
-"ß"
-"new
-line"
-"\n"
-"       tab"
+"
+'
+ß
+new
+line
+\n
+       tab
 
 */
