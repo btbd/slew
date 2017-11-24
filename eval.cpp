@@ -1,7 +1,6 @@
 #include "main.h"
 
-ARRAY stack = ArrayNew(sizeof(VALUE));
-int access_stack = 0;
+HHOOK keyboard_hook = 0;
 
 VALUE Process_close(VALUE *this_, ARRAY *arguments) {
 	return ValueNumber(CloseHandle(GetHandle(this_)));
@@ -19,6 +18,38 @@ VALUE Process_resume(VALUE *this_, ARRAY *arguments) {
 
 VALUE Process_exit(VALUE *this_, ARRAY *arguments) {
 	return ValueNumber(TerminateProcess(GetHandle(this_), 0));
+}
+
+VALUE Process_findInt(VALUE *this_, ARRAY *arguments) {
+	if (arguments->length > 0) {
+		HANDLE process = GetHandle(this_);
+		int value = (int)((VALUE *)ArrayGet(arguments, 0))->number;
+
+		VALUE ret = ValueArray();
+
+		SINT base = 0;
+		MEMORY_BASIC_INFORMATION mi = { 0 };
+		for (VirtualQueryEx(process, (void *)base, &mi, sizeof(mi));;) {
+			base += mi.RegionSize;
+			VirtualQueryEx(process, (void *)base, &mi, sizeof(mi));
+			if (base == (SINT)mi.BaseAddress + mi.RegionSize) break;
+			if (!(mi.State & (MEM_COMMIT | MEM_RESERVE))) continue;
+
+			char *buffer = (char *)malloc(mi.RegionSize);
+			ReadProcessMemory(process, mi.BaseAddress, buffer, mi.RegionSize, 0);
+			for (SINT i = 0; i < mi.RegionSize; i += 4) {
+				if (*(int *)((SINT)buffer + i) == value) {
+					ArrayPush(ret.array, &ValueNumber((double)((SINT)mi.BaseAddress + i)));
+				}
+			}
+
+			free(buffer);
+		}
+
+		return ret;
+	}
+
+	return ValueNumber(0);
 }
 
 VALUE Process_findPattern(VALUE *this_, ARRAY *arguments) {
@@ -356,6 +387,9 @@ VALUE ValueProcess(HANDLE process, PROCESSENTRY32 info) {
 	t = ValueCompiledFunction(&Process_findPattern);
 	ValueSetProperty(&p, "findPattern", &t);
 
+	t = ValueCompiledFunction(&Process_findInt);
+	ValueSetProperty(&p, "findInt", &t);
+
 	return p;
 }
 
@@ -389,6 +423,84 @@ VALUE Thread_sleep(VALUE *this_, ARRAY *arguments) {
 			Sleep((DWORD)v->number);
 		}
 	}
+	return ValueNumber(0);
+}
+
+void CallUserFunction(THREAD_ARGUMENTS *ta) {
+	VALUE arguments = ValueArray();
+	ArrayFree(arguments.array);
+	free(arguments.array);
+	arguments.array = ta->arguments;
+	StackPush(&ta->thread, "arguments", &arguments, 1);
+
+	TREE *tree = ta->func->left;
+	unsigned int i = 0;
+	while (tree && i < ta->arguments->length) {
+		StackPush(&ta->thread, tree->token->value, &ValueCopy((VALUE *)ArrayGet(ta->arguments, i)), 1);
+
+		if (!tree->left) break;
+
+		tree = tree->left;
+		++i;
+	}
+
+	VALUE ret = { 0 };
+	tree = ta->func;
+	while (tree->right) {
+		ret = Eval(&ta->thread, tree->right->left, 1);
+		if (ret.return_) {
+			ret.return_ = false;
+			break;
+		}
+		ValueFree(&ret);
+		ret = { 0 };
+		tree = tree->right;
+	}
+
+	for (unsigned int i = 0; i < ta->thread.stack.length; ++i) {
+		ValueFree((VALUE *)ArrayGet(&ta->thread.stack, i));
+	}
+
+	ValueFree(&ret);
+}
+
+void _Thread_create(THREAD_ARGUMENTS *ta) {
+	if (ta) {
+		CallUserFunction(ta);
+		ArrayFree(&ta->thread.stack);
+		FreeTree(ta->func);
+		free(ta);
+		CloseHandle(GetCurrentThread());
+	}
+}
+
+VALUE Thread_create(VALUE *this_, ARRAY *arguments) {
+	if (arguments->length > 0) {
+		VALUE *v = (VALUE *)ArrayGet(arguments, 0);
+		if (v->type == VALUE_FUNCTION) {
+			TREE *func = CopyTree(v->function);
+
+			THREAD thread = { 0 };
+			thread.stack = ArrayNew(sizeof(VALUE));
+			ArrayPush(&thread.stack, &ValueStack());
+
+			ARRAY args = ArrayNew(sizeof(VALUE));
+			for (unsigned int i = 1; i < arguments->length; ++i) {
+				VALUE v = ValueCopy((VALUE *)ArrayGet(arguments, i));
+				v.stack_id = 1;
+				ArrayPush(&args, &v);
+			}
+
+			THREAD_ARGUMENTS *ta = (THREAD_ARGUMENTS *)malloc(sizeof(THREAD_ARGUMENTS));
+			ta->func = func;
+			ta->thread = thread;
+			ta->arguments = (ARRAY *)malloc(sizeof(ARRAY));
+			*ta->arguments = args;
+
+			CloseHandle(CreateThread(0, 0, (LPTHREAD_START_ROUTINE)_Thread_create, ta, 0, 0));
+		}
+	}
+
 	return ValueNumber(0);
 }
 
@@ -688,6 +800,33 @@ VALUE Date_getYear(VALUE *this_, ARRAY *arguments) {
 	return ValueNumber(time.wYear);
 }
 
+VALUE MessageBox_show(VALUE *this_, ARRAY *arguments) {
+	switch (arguments->length) {
+		case 1: {
+			VALUE *v = (VALUE *)ArrayGet(arguments, 0);
+			if (v->type == VALUE_STRING) {
+				MessageBoxA(0, v->string, "", 0);
+			}
+			break;
+		}
+		case 2: {
+			VALUE *v0 = (VALUE *)ArrayGet(arguments, 0);
+			if (v0->type == VALUE_STRING) {
+				VALUE *v1 = (VALUE *)ArrayGet(arguments, 1);
+				if (v1->type == VALUE_STRING) {
+					MessageBoxA(0, v1->string, v0->string, 0);
+				}
+			}
+			break;
+		}
+
+		default:
+			MessageBoxA(0, "", "", 0);
+	}
+
+	return ValueNumber(0);
+}
+
 // Input
 VALUE Input_click(VALUE *this_, ARRAY *arguments) {
 	return ValueNumber(0);
@@ -750,20 +889,219 @@ VALUE Input_isKeyDown(VALUE *this_, ARRAY *arguments) {
 	return ValueNumber(0);
 }
 
-void SetupLibraries() {
+TREE *onKeyDown = 0;
+TREE *onKeyUp = 0;
+LRESULT CALLBACK KeyboardHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
+	if (nCode >= 0) {
+		KBDLLHOOKSTRUCT data = *((KBDLLHOOKSTRUCT *)lParam);
+		int keycode = data.vkCode;
+
+		if (wParam == WM_KEYDOWN && onKeyDown) {
+			THREAD thread = { 0 };
+			thread.stack = ArrayNew(sizeof(VALUE));
+			ArrayPush(&thread.stack, &ValueStack());
+
+			ARRAY args = ArrayNew(sizeof(VALUE));
+			VALUE a0 = ValueNumber((double)keycode);
+			a0.stack_id = 1;
+			ArrayPush(&args, &a0);
+
+			THREAD_ARGUMENTS ta = { 0 };
+			ta.func = onKeyDown;
+			ta.thread = thread;
+			ta.arguments = (ARRAY *)malloc(sizeof(ARRAY));
+			*ta.arguments = args;
+
+			CallUserFunction(&ta);
+
+			ArrayFree(&ta.thread.stack);
+		} else if (wParam == WM_KEYUP && onKeyUp) {
+			THREAD thread = { 0 };
+			thread.stack = ArrayNew(sizeof(VALUE));
+			ArrayPush(&thread.stack, &ValueStack());
+
+			ARRAY args = ArrayNew(sizeof(VALUE));
+			VALUE a0 = ValueNumber((double)keycode);
+			a0.stack_id = 1;
+			ArrayPush(&args, &a0);
+
+			THREAD_ARGUMENTS ta = { 0 };
+			ta.func = onKeyUp;
+			ta.thread = thread;
+			ta.arguments = (ARRAY *)malloc(sizeof(ARRAY));
+			*ta.arguments = args;
+
+			CallUserFunction(&ta);
+
+			ArrayFree(&ta.thread.stack);
+		}
+	}
+
+	return CallNextHookEx(NULL, nCode, wParam, lParam);
+}
+
+VALUE Input_onKeyDown(VALUE *this_, ARRAY *arguments) {
+	if (arguments->length > 0) {
+		VALUE *v = (VALUE *)ArrayGet(arguments, 0);
+		if (v->type == VALUE_FUNCTION) {
+			if (onKeyDown) {
+				TREE *t = onKeyDown;
+				onKeyDown = 0;
+				FreeTree(t);
+			}
+
+			onKeyDown = CopyTree(v->function);
+		}
+	}
+
+	return ValueNumber(0);
+}
+
+VALUE Input_onKeyUp(VALUE *this_, ARRAY *arguments) {
+	if (arguments->length > 0) {
+		VALUE *v = (VALUE *)ArrayGet(arguments, 0);
+		if (v->type == VALUE_FUNCTION) {
+			if (onKeyUp) {
+				TREE *t = onKeyUp;
+				onKeyUp = 0;
+				FreeTree(t);
+			}
+
+			onKeyUp = CopyTree(v->function);
+		}
+	}
+
+	return ValueNumber(0);
+}
+
+in_addr GetAddrFromHost(char *host) {
+	struct hostent *info = 0;
+
+	if (info = gethostbyname(host)) {
+		for (unsigned int i = 0; info->h_addr_list[i]; ++i) {
+			return *(struct in_addr *)info->h_addr_list[i];
+		}
+	}
+
+	return{ 0 };
+}
+
+VALUE HTTP_get(VALUE *this_, ARRAY *arguments) {
+	VALUE ret = ValueNumber(0);
+
+	if (arguments->length > 0) {
+		VALUE *v = (VALUE *)ArrayGet(arguments, 0);
+		if (v->type == VALUE_STRING) {
+			char *host = _strdup(v->string);
+			char *path = _strdup("/");
+			for (char *c = host; *c; ++c) {
+				if (*c == '/') {
+					free(path);
+					path = _strdup(c);
+					*c = 0;
+					break;
+				}
+			}
+
+			in_addr info = GetAddrFromHost(host);
+			if (info.S_un.S_addr) {
+				struct sockaddr_in service = { 0 };
+				service.sin_family = AF_INET;
+				service.sin_addr = info;
+				service.sin_port = htons(80);
+
+				SOCKET s;
+				if ((s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) != INVALID_SOCKET) {
+					if (connect(s, (SOCKADDR *)&service, sizeof(service)) != SOCKET_ERROR) {
+						int length = snprintf(0, 0, \
+							"GET %s HTTP/1.0\r\n"\
+							"Host: %s\r\n"\
+							"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8\r\n"\
+							"Accept-Language: en-US,en;q=0.9\r\n"\
+							"Accept-Encoding: gzip, deflate, br\r\n"\
+							"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/62.0.3202.94 Safari/537.36\r\n\r\n", path, host);
+
+						char *data = (char *)malloc(length + 1);
+						sprintf(data,
+							"GET %s HTTP/1.0\r\n"\
+							"Host: %s\r\n"\
+							"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8\r\n"\
+							"Accept-Language: en-US,en;q=0.9\r\n"\
+							"Accept-Encoding: gzip, deflate, br\r\n"\
+							"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/62.0.3202.94 Safari/537.36\r\n\r\n", path, host);
+
+						if (send(s, data, length, 0)) {
+							int size = 0x1000;
+							char *buffer = (char *)malloc(size);
+
+							int total = 0;
+							for (;;) {
+								int r = recv(s, buffer + total, size - total, 0);
+								if (r < 1) {
+									buffer[total] = 0;
+									break;
+								}
+
+								total += r;
+
+								if (total >= size) {
+									size *= 2;
+									buffer = (char *)realloc(buffer, size);
+								}
+							}
+
+							ret = ValueRawString(buffer);
+							free(buffer);
+						}
+
+						free(data);
+					} else {
+						printf("\terror: unable to connect\n");
+					}
+
+					closesocket(s);
+				} else {
+					printf("\terror: unable to create a socket\n");
+				}
+			}
+
+			free(host);
+			free(path);
+		}
+	}
+
+	return ret;
+}
+
+void MessageLoop() {
+	keyboard_hook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardHookProc, 0, 0);
+
+	MSG msg;
+	while (GetMessage(&msg, nullptr, 0, 0)) {
+		TranslateMessage(&msg);
+		DispatchMessage(&msg);
+	}
+}
+
+void SetupLibraries(THREAD *thread) {
+	WSADATA wsaData;
+	if (WSAStartup(MAKEWORD(2, 2), &wsaData)) {
+		printf("\terror: WSAStartup failed. Sockets may be unavailable\n");
+	}
+
 	srand(GetTickCount());
 	
-	StackPush("true", &ValueNumber(1), 0);
-	StackPush("false", &ValueNumber(0), 0);
+	StackPush(thread, "true", &ValueNumber(1), 0);
+	StackPush(thread, "false", &ValueNumber(0), 0);
 
-	VALUE *Console = StackPush("Console", &ValueNumber(0), 0);
+	VALUE *Console = StackPush(thread, "Console", &ValueNumber(0), 0);
 	ValueSetProperty(Console, "print", &ValueCompiledFunction(&Console_print));
 	ValueSetProperty(Console, "println", &ValueCompiledFunction(&Console_println));
 	ValueSetProperty(Console, "log", &ValueCompiledFunction(&Console_println));
 	ValueSetProperty(Console, "clear", &ValueCompiledFunction(&Console_clear));
 	ValueSetProperty(Console, "readLine", &ValueCompiledFunction(&Console_readLine));
 
-	VALUE *Math = StackPush("Math", &ValueNumber(0), 0);
+	VALUE *Math = StackPush(thread, "Math", &ValueNumber(0), 0);
 	ValueSetProperty(Math, "E", &ValueNumber(2.718281828459045));
 	ValueSetProperty(Math, "LN2", &ValueNumber(0.6931471805599453));
 	ValueSetProperty(Math, "LN10", &ValueNumber(2.302585092994046));
@@ -801,7 +1139,7 @@ void SetupLibraries() {
 	ValueSetProperty(Math, "tanh", &ValueCompiledFunction(&Math_tanh));
 	ValueSetProperty(Math, "trunc", &ValueCompiledFunction(&Math_trunc));
 
-	VALUE *Date = StackPush("Date", &ValueNumber(0), 0);
+	VALUE *Date = StackPush(thread, "Date", &ValueNumber(0), 0);
 	ValueSetProperty(Date, "now", &ValueCompiledFunction(&Date_now));
 	ValueSetProperty(Date, "getMilliseconds", &ValueCompiledFunction(&Date_getMilliseconds));
 	ValueSetProperty(Date, "getSeconds", &ValueCompiledFunction(&Date_getSeconds));
@@ -812,19 +1150,28 @@ void SetupLibraries() {
 	ValueSetProperty(Date, "getMonth", &ValueCompiledFunction(&Date_getMonth));
 	ValueSetProperty(Date, "getYear", &ValueCompiledFunction(&Date_getYear));
 
-	VALUE *Thread = StackPush("Thread", &ValueNumber(0), 0);
+	VALUE *Thread = StackPush(thread, "Thread", &ValueNumber(0), 0);
 	ValueSetProperty(Thread, "sleep", &ValueCompiledFunction(&Thread_sleep));
+	ValueSetProperty(Thread, "create", &ValueCompiledFunction(&Thread_create));
 
-	VALUE *Process = StackPush("Process", &ValueNumber(0), 0);
+	VALUE *Process = StackPush(thread, "Process", &ValueNumber(0), 0);
 	ValueSetProperty(Process, "open", &ValueCompiledFunction(&Process_open));
 
-	VALUE *Input = StackPush("Input", &ValueNumber(0), 0);
+	VALUE *MBox = StackPush(thread, "MessageBox", &ValueNumber(0), 0);
+	ValueSetProperty(MBox, "show", &ValueCompiledFunction(&MessageBox_show));
+
+	VALUE *Input = StackPush(thread, "Input", &ValueNumber(0), 0);
 	ValueSetProperty(Input, "keyDown", &ValueCompiledFunction(&Input_keyDown));
 	ValueSetProperty(Input, "keyUp", &ValueCompiledFunction(&Input_keyUp));
 	ValueSetProperty(Input, "keyPress", &ValueCompiledFunction(&Input_keyPress));
 	ValueSetProperty(Input, "isKeyDown", &ValueCompiledFunction(&Input_isKeyDown));
+	ValueSetProperty(Input, "onKeyDown", &ValueCompiledFunction(&Input_onKeyDown));
+	ValueSetProperty(Input, "onKeyUp", &ValueCompiledFunction(&Input_onKeyUp));
 
-	VALUE *Key = StackPush("Key", &ValueNumber(0), 0);
+	VALUE *HTTP = StackPush(thread, "HTTP", &ValueNumber(0), 0);
+	ValueSetProperty(HTTP, "get", &ValueCompiledFunction(&HTTP_get));
+
+	VALUE *Key = StackPush(thread, "Key", &ValueNumber(0), 0);
 	ValueSetProperty(Key, "LBUTTON", &ValueNumber(0x01));
 	ValueSetProperty(Key, "RBUTTON", &ValueNumber(0x02));
 	ValueSetProperty(Key, "CANCEL", &ValueNumber(0x03));
@@ -963,92 +1310,53 @@ void SetupLibraries() {
 	ValueSetProperty(Key, "F22", &ValueNumber(0x85));
 	ValueSetProperty(Key, "F23", &ValueNumber(0x86));
 	ValueSetProperty(Key, "F24", &ValueNumber(0x87));
+
+	CreateThread(0, 0, (LPTHREAD_START_ROUTINE)MessageLoop, 0, 0, 0);
 }
 
-VALUE String_get(VALUE *this_, ARRAY *arguments) {
-	if (arguments->length > 0 && this_->type == VALUE_STRING && this_->string) {
-		VALUE *v = (VALUE *)ArrayGet(arguments, 0);
-		if (v->type == VALUE_NUMBER && (int)v->number > -1 && (int)v->number < (int)this_->string_length) {
-			char b[2];
-			b[0] = this_->string[(int)v->number];
-			b[1] = 0;
-			return ValueRawString(b);
-		}
-	}
-
-	return ValueNumber(0);
-}
-
-VALUE String_length(VALUE *this_, ARRAY *arguments) {
-	if (this_->type == VALUE_STRING) {
-		return ValueNumber(this_->string_length);
-	}
-
-	return ValueNumber(0);
-}
-
-VALUE Array_get(VALUE *this_, ARRAY *arguments) {
-	if (arguments->length > 0 && this_->type == VALUE_ARRAY && this_->array && this_->array->length > 0) {
-		VALUE *v = (VALUE *)ArrayGet(arguments, 0);
-		if (v->type == VALUE_NUMBER && (int)v->number > -1 && (int)v->number < (int)this_->array->length) {
-			return ValueCopy((VALUE *)ArrayGet(this_->array, (int)v->number));
-		}
-	}
-
-	return ValueNumber(0);
-}
-
-VALUE Array_length(VALUE *this_, ARRAY *arguments) {
-	if (this_->type == VALUE_ARRAY) {
-		return ValueNumber(this_->array->length);
-	}
-
-	return ValueNumber(0);
-}
-
-VALUE Eval(TREE *tree, int stack_id) {
+VALUE Eval(THREAD *thread, TREE *tree, int stack_id) {
 	if (!tree || !tree->token) {
 		return{ 0 };
 	}
 
 	switch (tree->token->type) {
 		case TOKEN_DECLARATION: {
-			VALUE r = Eval(tree->right, stack_id);
-			if (StackContains(tree->left->token->value, stack_id)) {
-				StackSet(tree->left, &r, stack_id);
+			VALUE r = Eval(thread, tree->right, stack_id);
+			if (StackContains(thread, tree->left->token->value, stack_id)) {
+				StackSet(thread, tree->left, &ValueCopy(&r), stack_id);
 			} else {
 				VALUE n = { 0 };
-				StackPush(tree->left->token->value, &n, stack_id);
-				StackSet(tree->left, &r, stack_id);
+				StackPush(thread, tree->left->token->value, &n, stack_id);
+				StackSet(thread, tree->left, &ValueCopy(&r), stack_id);
 			}
 
 			return r;
 		}
 		case TOKEN_EQUAL: {
-			VALUE r = Eval(tree->right, stack_id);
-			StackSet(tree->left, &r, stack_id);
+			VALUE r = Eval(thread, tree->right, stack_id);
+			StackSet(thread, tree->left, &ValueCopy(&r), stack_id);
 			return r;
 		}
 		case TOKEN_WORD:
-			return ValueCopy(StackGetWithProperties(tree, stack_id));
+			return ValueCopy(StackGetWithProperties(thread, tree, stack_id));
 		case TOKEN_ACCESSOR: {
-			VALUE l = Eval(tree->left, stack_id);
+			VALUE l = Eval(thread, tree->left, stack_id);
 
-			access_stack = stack_id;
+			thread->access_stack = stack_id;
 			stack_id = -1;
 
-			StackPush(0, &ValueScope(), -1);
-			StackPush("this", &l, -1);
+			StackPush(thread, 0, &ValueScope(thread), -1);
+			StackPush(thread, "this", &l, -1);
 			for (unsigned int i = 0; i < l.properties.length; ++i) {
 				VALUE *v = (VALUE *)ArrayGet(&l.properties, i);
-				StackPush(v->name, &ValueCopy(v), -1);
+				StackPush(thread, v->name, &ValueCopy(v), -1);
 			}
 			
-			VALUE r = Eval(tree->right, -1);
+			VALUE r = Eval(thread, tree->right, -1);
 
-			while (stack.length > 0) {
+			while (thread->stack.length > 0) {
 				VALUE v;
-				ArrayPop(&stack, &v);
+				ArrayPop(&thread->stack, &v);
 				if (v.type == VALUE_SCOPE) {
 					ValueFree(&v);
 					break;
@@ -1060,7 +1368,7 @@ VALUE Eval(TREE *tree, int stack_id) {
 		}
 		case TOKEN_CALL: {
 			bool in_access = stack_id == -1;
-			VALUE *var = StackGetWithProperties(tree->left, stack_id);
+			VALUE *var = StackGetWithProperties(thread, tree->left, stack_id);
 			if (!var || (var->type != VALUE_FUNCTION && var->type != VALUE_COMPILED_FUNCTION)) {
 				break;
 			}
@@ -1072,7 +1380,7 @@ VALUE Eval(TREE *tree, int stack_id) {
 				TREE *this_ = 0;
 				TREE *name = func.function->left;
 				while (tree->right && tree->right->left) {
-					VALUE v = Eval(tree->right->left, stack_id);
+					VALUE v = Eval(thread, tree->right->left, stack_id);
 					if (name) {
 						v.name = _strdup(name->token->value);
 						name = name->left;
@@ -1084,8 +1392,8 @@ VALUE Eval(TREE *tree, int stack_id) {
 				}
 
 				VALUE *vthis;
-				if (in_access && StackContains("this", -1)) {
-					vthis = StackGet("this", -1);
+				if (in_access && StackContains(thread, "this", -1)) {
+					vthis = StackGet(thread, "this", -1);
 				} else {
 					this_ = base;
 					while (this_->left && this_->left->left) {
@@ -1093,37 +1401,49 @@ VALUE Eval(TREE *tree, int stack_id) {
 					}
 
 					TREE *copy = this_->left; this_->left = 0;
-					vthis = StackGetWithProperties(base, stack_id);
+					vthis = StackGetWithProperties(thread, base, stack_id);
 					this_->left = copy;
 				}
 
 				++stack_id;
-				StackPush(0, &ValueScope(), -1);
-				StackPush("arguments", &args, stack_id);
-				StackPush("this", &ValueCopy(vthis), stack_id);
+				
+				VALUE s = { 0 };
+
+				s.type = VALUE_SCOPE;
+				for (int i = thread->stack.length - 1; i > -1; --i) {
+					VALUE *v = (VALUE *)ArrayGet(&thread->stack, i);
+					if (v == var) {
+						s.stack_last = i;
+						break;
+					}
+				}
+
+				StackPush(thread, 0, &s, -1);
+				StackPush(thread, "arguments", &args, stack_id);
+				StackPush(thread, "this", &ValueCopy(vthis), stack_id);
 
 				for (unsigned int i = 0; i < args.array->length; ++i) {
 					VALUE *v = (VALUE *)ArrayGet(args.array, i);
 					if (!v->name) break;
-					StackPush(v->name, &ValueCopy(v), stack_id);
+					StackPush(thread, v->name, &ValueCopy(v), stack_id);
 				}
 
 				tree = func.function;
 				VALUE ret = { 0 };
 				while (tree->right) {
-					ret = Eval(tree->right->left, stack_id);
+					ret = Eval(thread, tree->right->left, stack_id);
 					if (ret.return_) {
 						ret.return_ = false;
 						break;
 					}
-					//ValueFree(&ret);
+					ValueFree(&ret); // used to cause a crash for: a=func(){b:=[1,2,3,4].pop();return b;}
 					ret = { 0 };
 					tree = tree->right;
 				}
 
-				while (stack.length > 0) {
+				while (thread->stack.length > 0) {
 					VALUE v;
-					ArrayPop(&stack, &v);
+					ArrayPop(&thread->stack, &v);
 					if (v.type == VALUE_SCOPE) {
 						ValueFree(&v);
 						break;
@@ -1138,14 +1458,14 @@ VALUE Eval(TREE *tree, int stack_id) {
 				TREE *this_ = 0;
 				
 				while (tree->right && tree->right->left) {
-					VALUE v = Eval(tree->right->left, stack_id);
+					VALUE v = Eval(thread, tree->right->left, stack_id);
 					tree = tree->right;
 					ArrayPush(args.array, &v);
 				}
 
 				VALUE *vthis;
-				if (in_access && StackContains("this", -1)) {
-					vthis = StackGet("this", -1);
+				if (in_access && StackContains(thread, "this", -1)) {
+					vthis = StackGet(thread, "this", -1);
 				} else {
 					this_ = base;
 					while (this_->left && this_->left->left) {
@@ -1153,7 +1473,7 @@ VALUE Eval(TREE *tree, int stack_id) {
 					}
 
 					TREE *copy = this_->left; this_->left = 0;
-					vthis = StackGetWithProperties(base, stack_id);
+					vthis = StackGetWithProperties(thread, base, stack_id);
 					this_->left = copy;
 				}
 
@@ -1165,11 +1485,11 @@ VALUE Eval(TREE *tree, int stack_id) {
 			break;
 		}
 		case TOKEN_IF: {
-			VALUE r = Eval(tree->left->left, ++stack_id);
+			VALUE r = Eval(thread, tree->left->left, ++stack_id);
 			if (r.number) {
 				tree = tree->left;
 				while (tree->right) {
-					VALUE v = Eval(tree->right->left, stack_id);
+					VALUE v = Eval(thread, tree->right->left, stack_id);
 					if (v.return_) {
 						RETURN_OUT(v);
 					}
@@ -1182,10 +1502,10 @@ VALUE Eval(TREE *tree, int stack_id) {
 			while (tree->right) {
 				if (tree->right->token->type == TOKEN_ELSE_IF) {
 					TREE *t = tree->right->left;
-					r = Eval(t->left, ++stack_id);
+					r = Eval(thread, t->left, ++stack_id);
 					if (r.number) {
 						while (t->right) {
-							VALUE v = Eval(t->right->left, stack_id);
+							VALUE v = Eval(thread, t->right->left, stack_id);
 							if (v.return_) {
 								RETURN_OUT(v);
 							}
@@ -1199,7 +1519,7 @@ VALUE Eval(TREE *tree, int stack_id) {
 					++stack_id;
 					TREE *t = tree->right;
 					while (t->right) {
-						VALUE v = Eval(t->right->left, stack_id);
+						VALUE v = Eval(thread, t->right->left, stack_id);
 						if (v.return_) {
 							RETURN_OUT(v);
 						}
@@ -1218,11 +1538,11 @@ VALUE Eval(TREE *tree, int stack_id) {
 			++stack_id;
 			char break_ = 0;
 			VALUE v = { 0 };
-			while (!break_ && (v = Eval(tree->left, stack_id)).number) {
+			while (!break_ && (v = Eval(thread, tree->left, stack_id)).number) {
 				ValueFree(&v);
 				t = tree;
 				while (t->right) {
-					VALUE v = Eval(t->right->left, stack_id);
+					VALUE v = Eval(thread, t->right->left, stack_id);
 					if (v.return_) {
 						RETURN_OUT(v);
 					} else if (v.type == VALUE_BREAK) {
@@ -1241,28 +1561,30 @@ VALUE Eval(TREE *tree, int stack_id) {
 			++stack_id;
 			VALUE v = { 0 };
 			if (tree->left->left) {
-				v = Eval(tree->left->left, stack_id);
+				v = Eval(thread, tree->left->left, stack_id);
 				ValueFree(&v);
 				TREE *t = tree->left;
 				while (t->right) {
-					v = Eval(t->right->left, stack_id);
+					v = Eval(thread, t->right->left, stack_id);
 					ValueFree(&v);
 					t = t->right;
 				}
 			}
 
 			char break_ = 0;
-			while (!tree->right->left || (v = Eval(tree->right->left, stack_id)).number) {
+			while (!tree->right->left || (v = Eval(thread, tree->right->left, stack_id)).number) {
 				ValueFree(&v);
 				TREE *t = tree->right->right;
 				while (t->right) {
-					VALUE v = Eval(t->right->left, stack_id);
+					VALUE v = Eval(thread, t->right->left, stack_id);
 					if (v.return_) {
 						RETURN_OUT(v);
 					} else if (v.type == VALUE_BREAK) {
+						ValueFree(&v);
 						break_ = 1;
 						break;
 					}
+					ValueFree(&v);
 					t = t->right;
 				}
 
@@ -1272,11 +1594,11 @@ VALUE Eval(TREE *tree, int stack_id) {
 
 				t = tree->right->right;
 				if (t->left->left) {
-					v = Eval(t->left->left, stack_id);
+					v = Eval(thread, t->left->left, stack_id);
 					ValueFree(&v);
 					t = tree->right->right->left;
 					while (t->right) {
-						v = Eval(t->right->left, stack_id);
+						v = Eval(thread, t->right->left, stack_id);
 						ValueFree(&v);
 						t = t->right;
 					}
@@ -1287,22 +1609,22 @@ VALUE Eval(TREE *tree, int stack_id) {
 		}
 		case TOKEN_QUESTION: {
 			VALUE v = { 0 };
-			if ((v = Eval(tree->left, stack_id)).number) {
+			if ((v = Eval(thread, tree->left, stack_id)).number) {
 				ValueFree(&v);
-				return Eval(tree->right->left, stack_id);
+				return Eval(thread, tree->right->left, stack_id);
 			} else {
 				ValueFree(&v);
-				return Eval(tree->right->right, stack_id);
+				return Eval(thread, tree->right->right, stack_id);
 			}
+
+			break;
 		}
 		case TOKEN_PLUS_PLUS: {
-			VALUE *v = StackGetWithProperties(tree->left, stack_id);
+			VALUE *v = StackGetWithProperties(thread, tree->left, stack_id);
 			if (v && v->type == VALUE_NUMBER) {
 				++(v->number);
 
-				VALUE r = { 0 };
-				r.type = VALUE_NUMBER;
-				r.number = v->number;
+				VALUE r = ValueNumber(v->number);
 				if (*tree->token->value != '+') {
 					--r.number;
 				}
@@ -1312,13 +1634,11 @@ VALUE Eval(TREE *tree, int stack_id) {
 			break;
 		}
 		case TOKEN_MINUS_MINUS: {
-			VALUE *v = StackGetWithProperties(tree->left, stack_id);
+			VALUE *v = StackGetWithProperties(thread, tree->left, stack_id);
 			if (v && v->type == VALUE_NUMBER) {
 				--(v->number);
 
-				VALUE r = { 0 };
-				r.type = VALUE_NUMBER;
-				r.number = v->number;
+				VALUE r = ValueNumber(v->number);
 				if (*tree->token->value != '-') {
 					++r.number;
 				}
@@ -1329,140 +1649,144 @@ VALUE Eval(TREE *tree, int stack_id) {
 		}
 		case TOKEN_PLUS_EQUAL: {
 			tree->token->type = TOKEN_PLUS;
-			VALUE n = Eval(tree, stack_id);
-			VALUE *v = StackGetWithProperties(tree->left, stack_id);
+			VALUE n = Eval(thread, tree, stack_id);
+			VALUE *v = StackGetWithProperties(thread, tree->left, stack_id);
 			if (v) {
-				StackSet(tree->left, &n, stack_id);
+				StackSet(thread, tree->left, &ValueCopy(&n), stack_id);
 				return n;
 			}
+			ValueFree(&n);
 			break;
 		}
 		case TOKEN_MINUS_EQUAL: {
 			tree->token->type = TOKEN_MINUS;
-			VALUE n = Eval(tree, stack_id);
-			VALUE *v = StackGetWithProperties(tree->left, stack_id);
+			VALUE n = Eval(thread, tree, stack_id);
+			VALUE *v = StackGetWithProperties(thread, tree->left, stack_id);
 			if (v) {
-				StackSet(tree->left, &n, stack_id);
+				StackSet(thread, tree->left, &ValueCopy(&n), stack_id);
 				return n;
 			}
+			ValueFree(&n);
 			break;
 		}
 		case TOKEN_MULTIPLY_EQUAL: {
 			tree->token->type = TOKEN_MULTIPLY;
-			VALUE n = Eval(tree, stack_id);
-			VALUE *v = StackGetWithProperties(tree->left, stack_id);
+			VALUE n = Eval(thread, tree, stack_id);
+			VALUE *v = StackGetWithProperties(thread, tree->left, stack_id);
 			if (v) {
-				StackSet(tree->left, &n, stack_id);
+				StackSet(thread, tree->left, &ValueCopy(&n), stack_id);
 				return n;
 			}
+			ValueFree(&n);
 			break;
 		}
 		case TOKEN_DIVIDE_EQUAL: {
 			tree->token->type = TOKEN_DIVIDE;
-			VALUE n = Eval(tree, stack_id);
-			VALUE *v = StackGetWithProperties(tree->left, stack_id);
+			VALUE n = Eval(thread, tree, stack_id);
+			VALUE *v = StackGetWithProperties(thread, tree->left, stack_id);
 			if (v) {
-				StackSet(tree->left, &n, stack_id);
+				StackSet(thread, tree->left, &ValueCopy(&n), stack_id);
 				return n;
 			}
+			ValueFree(&n);
 			break;
 		}
 		case TOKEN_MOD_EQUAL: {
 			tree->token->type = TOKEN_MOD;
-			VALUE n = Eval(tree, stack_id);
-			VALUE *v = StackGetWithProperties(tree->left, stack_id);
+			VALUE n = Eval(thread, tree, stack_id);
+			VALUE *v = StackGetWithProperties(thread, tree->left, stack_id);
 			if (v) {
-				StackSet(tree->left, &n, stack_id);
+				StackSet(thread, tree->left, &ValueCopy(&n), stack_id);
 				return n;
 			}
+			ValueFree(&n);
 			break;
 		}
 		case TOKEN_AND_EQUAL: {
 			tree->token->type = TOKEN_AND;
-			VALUE n = Eval(tree, stack_id);
-			VALUE *v = StackGetWithProperties(tree->left, stack_id);
+			VALUE n = Eval(thread, tree, stack_id);
+			VALUE *v = StackGetWithProperties(thread, tree->left, stack_id);
 			if (v) {
-				StackSet(tree->left, &n, stack_id);
+				StackSet(thread, tree->left, &ValueCopy(&n), stack_id);
 				return n;
 			}
+			ValueFree(&n);
 			break;
 		}
 		case TOKEN_OR_EQUAL: {
 			tree->token->type = TOKEN_OR;
-			VALUE n = Eval(tree, stack_id);
-			VALUE *v = StackGetWithProperties(tree->left, stack_id);
+			VALUE n = Eval(thread, tree, stack_id);
+			VALUE *v = StackGetWithProperties(thread, tree->left, stack_id);
 			if (v) {
-				StackSet(tree->left, &n, stack_id);
+				StackSet(thread, tree->left, &ValueCopy(&n), stack_id);
 				return n;
 			}
+			ValueFree(&n);
 			break;
 		}
 		case TOKEN_XOR_EQUAL: {
 			tree->token->type = TOKEN_XOR;
-			VALUE n = Eval(tree, stack_id);
-			VALUE *v = StackGetWithProperties(tree->left, stack_id);
+			VALUE n = Eval(thread, tree, stack_id);
+			VALUE *v = StackGetWithProperties(thread, tree->left, stack_id);
 			if (v) {
-				StackSet(tree->left, &n, stack_id);
+				StackSet(thread, tree->left, &ValueCopy(&n), stack_id);
 				return n;
 			}
+			ValueFree(&n);
 			break;
 		}
 		case TOKEN_SHIFT_LEFT_EQUAL: {
 			tree->token->type = TOKEN_SHIFT_LEFT;
-			VALUE n = Eval(tree, stack_id);
-			VALUE *v = StackGetWithProperties(tree->left, stack_id);
+			VALUE n = Eval(thread, tree, stack_id);
+			VALUE *v = StackGetWithProperties(thread, tree->left, stack_id);
 			if (v) {
-				StackSet(tree->left, &n, stack_id);
+				StackSet(thread, tree->left, &ValueCopy(&n), stack_id);
 				return n;
 			}
+			ValueFree(&n);
 			break;
 		}
 		case TOKEN_SHIFT_RIGHT_EQUAL: {
 			tree->token->type = TOKEN_SHIFT_RIGHT;
-			VALUE n = Eval(tree, stack_id);
-			VALUE *v = StackGetWithProperties(tree->left, stack_id);
+			VALUE n = Eval(thread, tree, stack_id);
+			VALUE *v = StackGetWithProperties(thread, tree->left, stack_id);
 			if (v) {
-				StackSet(tree->left, &n, stack_id);
+				StackSet(thread, tree->left, &ValueCopy(&n), stack_id);
 				return n;
 			}
+			ValueFree(&n);
 			break;
 		}
 		case TOKEN_PLUS: {
-			VALUE l = Eval(tree->left, stack_id);
-			VALUE r = Eval(tree->right, stack_id);
+			VALUE l = Eval(thread, tree->left, stack_id);
+			VALUE r = Eval(thread, tree->right, stack_id);
 
 			VALUE v = { 0 };
 			if (l.type == VALUE_NUMBER && r.type == VALUE_NUMBER) {
-				v.type = VALUE_NUMBER;
-				v.number = l.number + r.number;
+				v = ValueNumber(l.number + r.number);
 			} else if (l.type == VALUE_STRING && r.type == VALUE_STRING) {
-				v.type = VALUE_STRING;
-				v.string_length = l.string_length + r.string_length;
-				v.string = (char *)malloc(v.string_length + 1);
-				sprintf(v.string, "%s%s", l.string, r.string);
+				char *s = (char *)malloc(l.string_length + r.string_length + 1);
+				sprintf(s, "%s%s", l.string, r.string);
+				v = ValueRawString(s);
+				free(s);
 			} else if (l.type == VALUE_STRING && r.type == VALUE_NUMBER) {
-				v.type = VALUE_STRING;
-
 				char temp[0xFF] = { 0 };
 				int nl = sprintf(temp, "%.17g", r.number);
 
-				v.string_length = l.string_length + nl;
-				v.string = (char *)malloc(v.string_length + 1);
-
-				sprintf(v.string, "%s%s", l.string, temp);
+				char *s = (char *)malloc(l.string_length + nl + 1);
+				sprintf(s, "%s%s", l.string, temp);
+				v = ValueRawString(s);
+				free(s);
 			} else if (l.type == VALUE_NUMBER && r.type == VALUE_STRING) {
-				v.type = VALUE_STRING;
-
 				char temp[0xFF] = { 0 };
 				int nl = sprintf(temp, "%.17g", l.number);
 
-				v.string_length = r.string_length + nl;
-				v.string = (char *)malloc(v.string_length + 1);
-
-				sprintf(v.string, "%s%s", temp, r.string);
+				char *s = (char *)malloc(r.string_length + nl + 1);
+				sprintf(s, "%s%s", temp, r.string);
+				v = ValueRawString(s);
+				free(s);
 			} else {
-				v.type = VALUE_NUMBER;
-				v.number = 0;
+				v = ValueNumber(0);
 			}
 
 			ValueFree(&l);
@@ -1470,123 +1794,104 @@ VALUE Eval(TREE *tree, int stack_id) {
 			return v;
 		}
 		case TOKEN_MINUS: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? left.number - right.number : 0;
+			VALUE v = ValueNumber(left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? left.number - right.number : 0);
 
 			ValueFree(&left);
 			ValueFree(&right);
 			return v;
 		}
 		case TOKEN_MULTIPLY: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? left.number * right.number : 0;
+			VALUE v = ValueNumber(left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? left.number * right.number : 0);
 
 			ValueFree(&left);
 			ValueFree(&right);
 			return v;
 		}
 		case TOKEN_DIVIDE: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? left.number / right.number : 0;
+			VALUE v = ValueNumber(left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? left.number / right.number : 0);
 
 			ValueFree(&left);
 			ValueFree(&right);
 			return v;
 		}
 		case TOKEN_MOD: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? (int)left.number % (int)right.number : 0;
+			VALUE v = ValueNumber(left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? (int)left.number % (int)right.number : 0);
 
 			ValueFree(&left);
 			ValueFree(&right);
 			return v;
 		}
 		case TOKEN_AND: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? (int)left.number & (int)right.number : 0;
+			VALUE v = ValueNumber(left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? (int)left.number & (int)right.number : 0);
 
 			ValueFree(&left);
 			ValueFree(&right);
 			return v;
 		}
 		case TOKEN_OR: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? (int)left.number | (int)right.number : 0;
+			VALUE v = ValueNumber(left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? (int)left.number | (int)right.number : 0);
 
 			ValueFree(&left);
 			ValueFree(&right);
 			return v;
 		}
 		case TOKEN_XOR: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? (int)left.number ^ (int)right.number : 0;
+			VALUE v = ValueNumber(left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? (int)left.number ^ (int)right.number : 0);
 
 			ValueFree(&left);
 			ValueFree(&right);
 			return v;
 		}
 		case TOKEN_SHIFT_LEFT: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? (int)left.number << (int)right.number : 0;
+			VALUE v = ValueNumber(left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? (int)left.number << (int)right.number : 0);
 
 			ValueFree(&left);
 			ValueFree(&right);
 			return v;
 		}
 		case TOKEN_SHIFT_RIGHT: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? (int)left.number >> (int)right.number : 0;
+			VALUE v = ValueNumber(left.type == VALUE_NUMBER && right.type == VALUE_NUMBER ? (int)left.number >> (int)right.number : 0);
 
 			ValueFree(&left);
 			ValueFree(&right);
 			return v;
 		}
 		case TOKEN_EQUAL_EQUAL: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
 			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
 			if (left.type == VALUE_STRING && right.type == VALUE_STRING) {
-				v.number = strcmp(left.string, right.string) == 0;
+				v = ValueNumber(strcmp(left.string, right.string) == 0);
 			} else {
-				v.number = left.number == right.number;
+				v = ValueNumber(left.number == right.number);
 			}
 
 			ValueFree(&left);
@@ -1594,15 +1899,14 @@ VALUE Eval(TREE *tree, int stack_id) {
 			return v;
 		}
 		case TOKEN_NOT_EQUAL: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
 			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
 			if (left.type == VALUE_STRING && right.type == VALUE_STRING) {
-				v.number = strcmp(left.string, right.string) != 0;
+				v = ValueNumber(strcmp(left.string, right.string) != 0);
 			} else {
-				v.number = left.number == right.number;
+				v = ValueNumber(left.number == right.number);
 			}
 
 			ValueFree(&left);
@@ -1610,83 +1914,69 @@ VALUE Eval(TREE *tree, int stack_id) {
 			return v;
 		}
 		case TOKEN_AND_AND: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = left.number && right.number;
+			VALUE v = ValueNumber(left.number && right.number);
 
 			ValueFree(&left);
 			ValueFree(&right);
 			return v;
 		}
 		case TOKEN_OR_OR: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = left.number || right.number;
+			VALUE v = ValueNumber(left.number || right.number);
 
 			ValueFree(&left);
 			ValueFree(&right);
 			return v;
 		}
 		case TOKEN_GREATER: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = left.number > right.number;
+			VALUE v = ValueNumber(left.number > right.number);
 
 			ValueFree(&left);
 			ValueFree(&right);
 			return v;
 		}
 		case TOKEN_GREATER_EQUAL: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = left.number >= right.number;
+			VALUE v = ValueNumber(left.number >= right.number);
 
 			ValueFree(&left);
 			ValueFree(&right);
 			return v;
 		}
 		case TOKEN_LESS: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = left.number < right.number;
+			VALUE v = ValueNumber(left.number < right.number);
 
 			ValueFree(&left);
 			ValueFree(&right);
 			return v;
 		}
 		case TOKEN_LESS_EQUAL: {
-			VALUE left = Eval(tree->left, stack_id);
-			VALUE right = Eval(tree->right, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
+			VALUE right = Eval(thread, tree->right, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = left.number <= right.number;
+			VALUE v = ValueNumber(left.number <= right.number);
 
 			ValueFree(&left);
 			ValueFree(&right);
 			return v;
 		}
 		case TOKEN_NOT: {
-			VALUE left = Eval(tree->left, stack_id);
+			VALUE left = Eval(thread, tree->left, stack_id);
 
-			VALUE v = { 0 };
-			v.type = VALUE_NUMBER;
-			v.number = !left.number;
+			VALUE v = ValueNumber(!left.number);
 
 			ValueFree(&left);
 			return v;
@@ -1707,26 +1997,26 @@ VALUE Eval(TREE *tree, int stack_id) {
 
 			TREE *e = tree;
 			if (e->left) {
-				ArrayPush(v.array, &Eval(e->left, stack_id));
+				ArrayPush(v.array, &Eval(thread, e->left, stack_id));
 
 				while (e->right) {
 					e = e->right;
 
-					ArrayPush(v.array, &Eval(e->left, stack_id));
+					ArrayPush(v.array, &Eval(thread, e->left, stack_id));
 				}
 			}
 
 			return v;
 		}
 		case TOKEN_FUNC:
-			return ValueFunction(tree);
+			return ValueFunction(thread, tree);
 		case TOKEN_BREAK: {
 			VALUE v = { 0 };
 			v.type = VALUE_BREAK;
 			return v;
 		}
 		case TOKEN_RETURN: {
-			VALUE v = Eval(tree->left, stack_id);
+			VALUE v = Eval(thread, tree->left, stack_id);
 			v.return_ = 1;
 			return v;
 		}
@@ -1735,11 +2025,151 @@ VALUE Eval(TREE *tree, int stack_id) {
 	return{ 0 };
 }
 
+VALUE Number_toExponential(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_NUMBER) {
+		char str[0xFF] = { 0 };
+		sprintf(str, "%e", this_->number);
+		return ValueRawString(str);
+	}
+	return ValueNumber(0);
+}
+
+VALUE Number_toString(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_NUMBER) {
+		char str[0xFF] = { 0 };
+		sprintf(str, "%.17g", this_->number);
+		return ValueRawString(str);
+	}
+	return ValueNumber(0);
+}
+
+VALUE Number_toFixed(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_NUMBER) {
+		char precision[0xFF] = "%.0";
+
+		if (arguments->length > 0) {
+			VALUE *v = (VALUE *)ArrayGet(arguments, 0);
+			if (v->type == VALUE_NUMBER && v->number >= 0) {
+				sprintf(precision + 2, "%.0f", v->number);
+			}
+		}
+
+		strcat(precision, "f");
+
+		char str[0xFF] = { 0 };
+		sprintf(str, precision, this_->number);
+		return ValueRawString(str);
+	}
+	return ValueNumber(0);
+}
+
 VALUE ValueNumber(double number) {
 	VALUE v = { 0 };
 	v.type = VALUE_NUMBER;
 	v.number = number;
+
+	ValueSetProperty(&v, "toExponential", &ValueCompiledFunction(&Number_toExponential));
+	ValueSetProperty(&v, "toFixed", &ValueCompiledFunction(&Number_toFixed));
+	ValueSetProperty(&v, "toString", &ValueCompiledFunction(&Number_toString));
+
 	return v;
+}
+
+VALUE String_get(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_STRING && arguments->length > 0 && this_->string) {
+		VALUE *v = (VALUE *)ArrayGet(arguments, 0);
+		if (v->type == VALUE_NUMBER && (int)v->number > -1 && (int)v->number < (int)this_->string_length) {
+			char b[2];
+			b[0] = this_->string[(int)v->number];
+			b[1] = 0;
+			return ValueRawString(b);
+		}
+	}
+
+	return ValueNumber(0);
+}
+
+VALUE String_set(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_STRING && arguments->length > 1 && this_->string) {
+		VALUE *v0 = (VALUE *)ArrayGet(arguments, 0);
+		if (v0->type == VALUE_NUMBER && (int)v0->number > -1 && (int)v0->number < (int)this_->string_length) {
+			VALUE *v1 = (VALUE *)ArrayGet(arguments, 1);
+			if (v1->type == VALUE_STRING && v1->string && v1->string_length > 0) {
+				this_->string[(int)v0->number] = *v1->string;
+			}
+		}
+	}
+
+	return ValueNumber(0);
+}
+
+VALUE String_charCodeAt(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_STRING && this_->string && arguments->length > 0) {
+		VALUE *v = (VALUE *)ArrayGet(arguments, 0);
+		if (v->type == VALUE_NUMBER && (int)v->number > -1 && (int)v->number < (int)this_->string_length) {
+			return ValueNumber(this_->string[(int)v->number]);
+		}
+	}
+
+	return ValueNumber(0);
+}
+
+VALUE String_toUpperCase(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_STRING && this_->string) {
+		char *str = _strdup(this_->string);
+
+		for (char *c = str; *c; ++c) *c = toupper(*c);
+
+		VALUE r = ValueRawString(str);
+		free(str);
+		return r;
+	}
+
+	return ValueNumber(0);
+}
+
+VALUE String_toLowerCase(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_STRING && this_->string) {
+		char *str = _strdup(this_->string);
+
+		for (char *c = str; *c; ++c) *c = tolower(*c);
+
+		VALUE r = ValueRawString(str);
+		free(str);
+		return r;
+	}
+
+	return ValueNumber(0);
+}
+
+VALUE String_toNumber(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_STRING && this_->string) {
+		return ValueNumber(atof(this_->string));
+	}
+
+	return ValueNumber(0);
+}
+
+VALUE String_indexOf(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_STRING && this_->string && arguments->length > 0) {
+		VALUE *v = (VALUE *)ArrayGet(arguments, 0);
+		if (v->type == VALUE_STRING && v->string) {
+			char *i = strstr(this_->string, v->string);
+			if (i) {
+				return ValueNumber((double)(i - this_->string));
+			}
+		}
+	}
+	
+	return ValueNumber(-1);
+}
+
+VALUE String_length(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_STRING) {
+		return ValueNumber(this_->string_length);
+	}
+
+	return ValueNumber(0);
 }
 
 VALUE ValueString(char *string_) {
@@ -1801,8 +2231,14 @@ VALUE ValueString(char *string_) {
 		}
 	}
 
-	ValueSetProperty(&value, "get", &ValueCompiledFunction(&String_get));
 	ValueSetProperty(&value, "length", &ValueCompiledFunction(&String_length));
+	ValueSetProperty(&value, "get", &ValueCompiledFunction(&String_get));
+	ValueSetProperty(&value, "set", &ValueCompiledFunction(&String_set));
+	ValueSetProperty(&value, "charCodeAt", &ValueCompiledFunction(&String_charCodeAt));
+	ValueSetProperty(&value, "toUpperCase", &ValueCompiledFunction(&String_toUpperCase));
+	ValueSetProperty(&value, "toLowerCase", &ValueCompiledFunction(&String_toLowerCase));
+	ValueSetProperty(&value, "toNumber", &ValueCompiledFunction(&String_toNumber));
+	ValueSetProperty(&value, "indexOf", &ValueCompiledFunction(&String_indexOf));
 
 	return value;
 }
@@ -1814,10 +2250,71 @@ VALUE ValueRawString(char *string_) {
 	value.string_length = (unsigned int)strlen(string_);
 	value.string = (char *)_strdup(string_);
 
-	ValueSetProperty(&value, "get", &ValueCompiledFunction(&String_get));
 	ValueSetProperty(&value, "length", &ValueCompiledFunction(&String_length));
+	ValueSetProperty(&value, "get", &ValueCompiledFunction(&String_get));
+	ValueSetProperty(&value, "set", &ValueCompiledFunction(&String_set));
+	ValueSetProperty(&value, "charCodeAt", &ValueCompiledFunction(&String_charCodeAt));
+	ValueSetProperty(&value, "toUpperCase", &ValueCompiledFunction(&String_toUpperCase));
+	ValueSetProperty(&value, "toLowerCase", &ValueCompiledFunction(&String_toLowerCase));
+	ValueSetProperty(&value, "toNumber", &ValueCompiledFunction(&String_toNumber));
+	ValueSetProperty(&value, "indexOf", &ValueCompiledFunction(&String_indexOf));
 
 	return value;
+}
+
+VALUE Array_set(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_ARRAY && arguments->length > 1) {
+		VALUE *v0 = (VALUE *)ArrayGet(arguments, 0);
+		if (v0->type == VALUE_NUMBER) {
+			int index = (int)v0->number;
+			if (index > -1 && index < (int)this_->array->length) {
+				ArraySet(this_->array, index, &ValueCopy((VALUE *)ArrayGet(arguments, 1)));
+			}
+		}
+	}
+
+	return ValueNumber(0);
+}
+
+VALUE Array_get(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_ARRAY && arguments->length > 0 && this_->array && this_->array->length > 0) {
+		VALUE *v = (VALUE *)ArrayGet(arguments, 0);
+		if (v->type == VALUE_NUMBER && (int)v->number > -1 && (int)v->number < (int)this_->array->length) {
+			return ValueCopy((VALUE *)ArrayGet(this_->array, (int)v->number));
+		}
+	}
+
+	return ValueNumber(0);
+}
+
+VALUE Array_push(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_ARRAY && arguments->length > 0) {
+		for (unsigned int i = 0; i < arguments->length; ++i) {
+			ArrayPush(this_->array, &ValueCopy((VALUE *)ArrayGet(arguments, i)));
+		}
+		
+		return ValueNumber(this_->array->length - 1);
+	}
+
+	return ValueNumber(-1);
+}
+
+VALUE Array_pop(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_ARRAY && this_->array->length > 0) {
+		VALUE out = { 0 };
+		ArrayPop(this_->array, &out);
+		return out;
+	}
+
+	return ValueNumber(0);
+}
+
+VALUE Array_length(VALUE *this_, ARRAY *arguments) {
+	if (this_->type == VALUE_ARRAY) {
+		return ValueNumber(this_->array->length);
+	}
+
+	return ValueNumber(0);
 }
 
 VALUE ValueArray() {
@@ -1827,28 +2324,31 @@ VALUE ValueArray() {
 	value.array = (ARRAY *)malloc(sizeof(ARRAY));
 	memcpy(value.array, &ArrayNew(sizeof(VALUE)), sizeof(ARRAY));
 
-	ValueSetProperty(&value, "get", &ValueCompiledFunction(&Array_get));
 	ValueSetProperty(&value, "length", &ValueCompiledFunction(&Array_length));
+	ValueSetProperty(&value, "set", &ValueCompiledFunction(&Array_set));
+	ValueSetProperty(&value, "get", &ValueCompiledFunction(&Array_get));
+	ValueSetProperty(&value, "push", &ValueCompiledFunction(&Array_push));
+	ValueSetProperty(&value, "pop", &ValueCompiledFunction(&Array_pop));
 
 	return value;
 }
 
-VALUE ValueFunction(TREE *function) {
+VALUE ValueFunction(THREAD *thread, TREE *function) {
 	VALUE value = { 0 };
 
 	value.type = VALUE_FUNCTION;
 	value.function = CopyTree(function);
-	value.stack_last = stack.length;
+	value.stack_last = thread->stack.length;
 
 	return value;
 }
 
-VALUE ValueScope() {
+VALUE ValueScope(THREAD *thread) {
 	VALUE value = { 0 };
 
 	value.type = VALUE_SCOPE;
-	for (int i = stack.length - 1; i > -1; --i) {
-		VALUE *v = (VALUE *)ArrayGet(&stack, i);
+	for (int i = thread->stack.length - 1; i > -1; --i) {
+		VALUE *v = (VALUE *)ArrayGet(&thread->stack, i);
 		if (v->stack_id == 0) {
 			value.stack_last = i;
 			break;
@@ -1902,6 +2402,23 @@ VALUE ValueCopy(VALUE *value) {
 	}
 
 	return v;
+}
+
+VALUE ValueStack() {
+	THREAD *mt = GetMainThread();
+	VALUE value = { 0 };
+	value.type = VALUE_STACK;
+	value.compiled_function = mt;
+
+	for (int i = mt->stack.length - 1; i > -1; --i) {
+		VALUE *v = (VALUE *)ArrayGet(&mt->stack, i);
+		if (v->stack_id == 0) {
+			value.stack_last = i;
+			break;
+		}
+	}
+
+	return value;
 }
 
 void PrintValue(VALUE *value, bool quotes) {
@@ -1971,6 +2488,7 @@ void ValueFree(VALUE *value) {
 			ValueFree((VALUE *)ArrayGet(&value->properties, i));
 		}
 		ArrayFree(&value->properties);
+		memset(&value->properties, 0, sizeof(ARRAY));
 	}
 
 	memset(value, 0, sizeof(VALUE));
@@ -2036,9 +2554,9 @@ VALUE *ValueSetProperty(VALUE *value, char *name, VALUE *property) {
 	return (VALUE *)ArrayPush(&value->properties, property);
 }
 
-bool StackContains(char *name, int stack_id) {
-	for (int i = (int)stack.length - 1; i > -1; --i) {
-		VALUE *v = (VALUE *)ArrayGet(&stack, i);
+bool StackContains(THREAD *thread, char *name, int stack_id) {
+	for (int i = (int)thread->stack.length - 1; i > -1; --i) {
+		VALUE *v = (VALUE *)ArrayGet(&thread->stack, i);
 		if (v->stack_id == stack_id && v->name && strcmp(name, v->name) == 0) {
 			return true;
 		}
@@ -2047,26 +2565,29 @@ bool StackContains(char *name, int stack_id) {
 	return false;
 }
 
-VALUE *StackPush(char *name, VALUE *value, int stack_id) {
+VALUE *StackPush(THREAD *thread, char *name, VALUE *value, int stack_id) {
 	VALUE n = { 0 };
 	memcpy(&n, value, sizeof(VALUE));
 	n.name = name ? _strdup(name) : 0;
 	n.stack_id = stack_id;
-	return (VALUE *)ArrayPush(&stack, &n);
+	return (VALUE *)ArrayPush(&thread->stack, &n);
 }
 
-VALUE *StackGet(char *name, int stack_id) {
-	if (access_stack != 0) {
-		int t = access_stack;
-		access_stack = 0;
-		VALUE *ret = StackGet(name, stack_id);
+VALUE *StackGet(THREAD *thread, char *name, int stack_id) {
+	if (thread->access_stack != 0) {
+		int t = thread->access_stack;
+		thread->access_stack = 0;
+		VALUE *ret = StackGet(thread, name, stack_id);
 		stack_id = t;
 		return ret;
 	}
 
-	for (int i = (int)stack.length - 1; i > -1; --i) {
-		VALUE *v = (VALUE *)ArrayGet(&stack, i);
+	for (int i = (int)thread->stack.length - 1; i > -1; --i) {
+		VALUE *v = (VALUE *)ArrayGet(&thread->stack, i);
 		if (v->type == VALUE_SCOPE) {
+			i = v->stack_last + 1;
+		} else if (v->type == VALUE_STACK) {
+			thread = (THREAD *)v->compiled_function;
 			i = v->stack_last + 1;
 		} else if (v->stack_id <= stack_id && v->name && strcmp(name, v->name) == 0) {
 			return v;
@@ -2076,8 +2597,8 @@ VALUE *StackGet(char *name, int stack_id) {
 	return 0;
 }
 
-VALUE *StackGetWithProperties(TREE *var, int stack_id) {
-	VALUE *v = StackGet(var->token->value, stack_id);
+VALUE *StackGetWithProperties(THREAD *thread, TREE *var, int stack_id) {
+	VALUE *v = StackGet(thread, var->token->value, stack_id);
 	if (v) {
 		while (var->left) {
 			v = ValueGetProperty(v, var->left->token->value);
@@ -2089,12 +2610,12 @@ VALUE *StackGetWithProperties(TREE *var, int stack_id) {
 	return 0;
 }
 
-void StackSet(TREE *var, VALUE *value, int stack_id) {
-	VALUE *v = StackGetWithProperties(var, stack_id);
+void StackSet(THREAD *thread, TREE *var, VALUE *value, int stack_id) {
+	VALUE *v = StackGetWithProperties(thread, var, stack_id);
 	if (!v) {
 		VALUE n = { 0 };
-		StackPush(var->token->value, &n, stack_id);
-		return StackSet(var, value, stack_id);
+		StackPush(thread, var->token->value, &n, stack_id);
+		return StackSet(thread, var, value, stack_id);
 	}
 
 	if (value->properties.buffer && value->properties.length > 0) {

@@ -13,6 +13,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <Windows.h>
+#include <process.h>
 
 #pragma comment(lib, "Winmm.lib")
 #pragma comment (lib, "Ws2_32.lib")
@@ -30,3 +31,5 @@
 #include "memory.h"
 
 using namespace std;
+
+THREAD *GetMainThread();

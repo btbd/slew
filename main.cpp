@@ -1,7 +1,10 @@
 #include "main.h"
 
+THREAD main_thread = { 0 };
+
 int main(int argc, char **argv) {
-	SetupLibraries();
+	main_thread.stack = ArrayNew(sizeof(VALUE));
+	SetupLibraries(&main_thread);
 
 	if (argc < 2) {
 		static char input[0xFFFF] = { 0 };
@@ -17,11 +20,11 @@ int main(int argc, char **argv) {
 					TREE *tree = CreateTree(&tokens, &i, false);
 					if (tree) {
 						// PrintTree(tree);
-						VALUE value = Eval(tree, 0);
+						VALUE value = Eval(&main_thread, tree, 0);
 						fputs("< ", stdout);
 						PrintValue(&value, 1);
 						putchar('\n');
-						// ValueFree(&value);
+						ValueFree(&value);
 						FreeTree(tree);
 					}
 				}
@@ -51,7 +54,8 @@ int main(int argc, char **argv) {
 			for (unsigned int i = 0; i < tokens.length; ++i) {
 				TREE *tree = CreateTree(&tokens, &i, false);
 				if (tree) {
-					VALUE value = Eval(tree, 0);
+					VALUE value = Eval(&main_thread, tree, 0);
+					ValueFree(&value);
 					FreeTree(tree);
 				}
 			}
@@ -66,4 +70,8 @@ int main(int argc, char **argv) {
 	}
 
 	return 0;
+}
+
+THREAD *GetMainThread() {
+	return &main_thread;
 }
