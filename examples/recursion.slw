@@ -1,0 +1,11 @@
+// Returns the specified fibonacci number
+
+func fib(n) {
+	return n < 2 ? n : fib(--n) + fib(--n);
+}
+
+for (;;) {
+	console.Print("Give me a number: ");
+	input := console.ReadLine();
+	console.Println("\t" + fib(string.ToNumber(input)));
+}

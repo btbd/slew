@@ -1,0 +1,17 @@
+// Types "hello" when you press "1"
+
+keys := [ 0x48, 0x45, 0x4C, 0x4C, 0x4F ];
+
+input.OnKeyDown(func(e) {
+	if (e == 0x31) {
+		for (i := 0; i < len(keys); ++i) {
+			input.KeyDown(keys[i]);
+			input.KeyUp(keys[i]);
+		}
+	}
+});
+
+// Keep the main thread alive by having it sleep constantly
+for (;;) {
+	thread.Sleep(99999999);
+}
