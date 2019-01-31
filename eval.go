@@ -48,6 +48,12 @@ type Stack struct {
 var global_stack = make(map[string]*Variable)
 var global_stack_mu = &sync.RWMutex{}
 
+func Error(t Token, format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "%d:%d: ", t.Line, t.Col)
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
+	os.Exit(1)
+}
+
 func MakeVariable(t byte, v interface{}) Variable {
 	return Variable{Type: t, Value: v}
 }
@@ -258,8 +264,7 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 				return v.Value.(func(*Variable, []Variable) Variable)(v.Parent, args)
 			}
 
-			fmt.Printf(`error: call on a non-function variable`)
-			os.Exit(1)
+			Error(tree.T, `call on a non-function variable`)
 		}
 	case TOKEN_RETURN:
 		{
@@ -370,8 +375,7 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 				return v2
 			}
 
-			fmt.Fprintln(os.Stderr, `invalid left-hand side in assignment`)
-			os.Exit(1)
+			Error(tree.T, `invalid left-hand side in declaration`)
 		}
 	case TOKEN_EQUAL:
 		{
@@ -384,8 +388,7 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 					*v = v2
 					return v2
 				} else {
-					fmt.Println(`variable on left is not defined`)
-					os.Exit(1)
+					Error(tree.T, `variable on left-hand side in assignment is undefined`)
 				}
 			} else if v1.Type == VAR_CHAR {
 				c := v1.Value.(VariableChar)
@@ -395,8 +398,7 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 				return n
 			}
 
-			fmt.Fprintln(os.Stderr, `invalid left-hand side in assignment`)
-			os.Exit(1)
+			Error(tree.T, `invalid left-hand side in assignment`)
 		}
 	case TOKEN_WORD:
 		return MakeVariable(VAR_VARIABLE, StackGet(tree.T.Value.(string), *thread, stack))
@@ -438,12 +440,10 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 					if arr := *v.Value.(*[]Variable); index >= 0 && index < len(arr) {
 						return MakeVariable(VAR_VARIABLE, &arr[index])
 					} else {
-						fmt.Fprintln(os.Stderr, `index is out of range`)
-						os.Exit(1)
+						Error(tree.C[1].T, `index is out of range`)
 					}
 				} else {
-					fmt.Fprintln(os.Stderr, `index is not a number`)
-					os.Exit(1)
+					Error(tree.C[1].T, `index is not a number`)
 				}
 			} else if v.Type == VAR_OBJECT {
 				i := ReduceVariable(Eval(tree.C[1], thread, stack))
@@ -459,8 +459,7 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 						return MakeVariable(VAR_VARIABLE, &n)
 					}
 				} else {
-					fmt.Fprintln(os.Stderr, `key is not a string`)
-					os.Exit(1)
+					Error(tree.T, `key is not a string`)
 				}
 			} else if v.Type == VAR_STRING {
 				i := ReduceVariable(Eval(tree.C[1], thread, stack))
@@ -472,8 +471,7 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 				}
 			}
 
-			fmt.Fprintln(os.Stderr, `cannot index on non-array, non-object, or non-string`)
-			os.Exit(1)
+			Error(tree.T, `cannot index on non-array, non-object, or non-string`)
 		}
 	case TOKEN_PERIOD:
 		{
@@ -491,8 +489,7 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 				}
 			}
 
-			fmt.Fprintf(os.Stderr, "%d:%d: cannot use accessor on non-object\n", tree.T.Line, tree.T.Col)
-			os.Exit(1)
+			Error(tree.T, `cannot use accessor on non-object`)
 		}
 	case TOKEN_SIGN_PLUS:
 		{
@@ -536,8 +533,7 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 				}
 			}
 
-			fmt.Fprintln(os.Stderr, `bad increment on non-variable`)
-			os.Exit(1)
+			Error(tree.T, `bad increment on non-variable`)
 		}
 	case TOKEN_POST_INC:
 		{
@@ -549,8 +545,7 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 				}
 			}
 
-			fmt.Fprintln(os.Stderr, `bad increment on non-variable`)
-			os.Exit(1)
+			Error(tree.T, `bad increment on non-variable`)
 		}
 	case TOKEN_PRE_DEC:
 		{
@@ -562,8 +557,7 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 				}
 			}
 
-			fmt.Fprintln(os.Stderr, `bad decrement on non-variable`)
-			os.Exit(1)
+			Error(tree.T, `bad decrement on non-variable`)
 		}
 	case TOKEN_POST_DEC:
 		{
@@ -575,8 +569,7 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 				}
 			}
 
-			fmt.Fprintln(os.Stderr, `bad decrement on non-variable`)
-			os.Exit(1)
+			Error(tree.T, `bad decrement on non-variable`)
 		}
 	case TOKEN_PLUS:
 		{

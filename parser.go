@@ -15,7 +15,7 @@ var parser_tokens []Token
 var current_token Token
 var last_token Token
 
-func Error(format string, args ...interface{}) {
+func ParseError(format string, args ...interface{}) {
 	if current_token.Line == 0 && current_token.Col == 0 {
 		fmt.Fprintf(os.Stderr, "unexpected EOF\n")
 	} else {
@@ -60,7 +60,7 @@ func Expect(token_type int) {
 			}
 		}
 
-		Error("Unexpected token %v expected %v", current_token.Value, expected)
+		ParseError("Unexpected token %v expected %v", current_token.Value, expected)
 	}
 }
 
@@ -118,7 +118,7 @@ func Factor() Tree {
 
 		t := Expression()
 		if IsNoTree(t) {
-			Error(`Expected an expression after sign`)
+			ParseError(`Expected an expression after sign`)
 		}
 
 		tree.C = append(tree.C, t)
@@ -184,7 +184,7 @@ func Product() Tree {
 					for Accept(TOKEN_COMMA) {
 						e = Expression()
 						if IsNoTree(e) {
-							Error(`Expected an expression after comma`)
+							ParseError(`Expected an expression after comma`)
 						}
 
 						tree.C = append(tree.C, e)
@@ -202,7 +202,7 @@ func Product() Tree {
 
 				e := Expression()
 				if IsNoTree(e) {
-					Error(`Expected an expression in indexing`)
+					ParseError(`Expected an expression in indexing`)
 				}
 
 				tree.C = append(tree.C, e)
@@ -240,7 +240,7 @@ func Product() Tree {
 
 			f := Product()
 			if IsNoTree(f) {
-				Error(`Expected an expression after operator`)
+				ParseError(`Expected an expression after operator`)
 			}
 
 			tree.C = append(tree.C, f)
@@ -259,7 +259,7 @@ func Sum() Tree {
 
 			t := Sum()
 			if IsNoTree(t) {
-				Error(`Expected an expression after operator`)
+				ParseError(`Expected an expression after operator`)
 			}
 
 			tree.C = append(tree.C, t)
@@ -278,7 +278,7 @@ func Comparison() Tree {
 
 			t := Comparison()
 			if IsNoTree(t) {
-				Error(`Expected an expression after operator`)
+				ParseError(`Expected an expression after operator`)
 			}
 
 			tree.C = append(tree.C, t)
@@ -297,7 +297,7 @@ func Bitwise() Tree {
 
 			t := Bitwise()
 			if IsNoTree(t) {
-				Error(`Expected an expression after operator`)
+				ParseError(`Expected an expression after operator`)
 			}
 
 			tree.C = append(tree.C, t)
@@ -316,7 +316,7 @@ func Logical() Tree {
 
 			t := Logical()
 			if IsNoTree(t) {
-				Error(`Expected an expression after operator`)
+				ParseError(`Expected an expression after operator`)
 			}
 
 			tree.C = append(tree.C, t)
@@ -335,7 +335,7 @@ func Ternary() Tree {
 
 			t := Ternary()
 			if IsNoTree(t) {
-				Error(`Expected an expression after ?`)
+				ParseError(`Expected an expression after ?`)
 			}
 
 			tree.C = append(tree.C, t)
@@ -344,7 +344,7 @@ func Ternary() Tree {
 
 			t = Ternary()
 			if IsNoTree(t) {
-				Error(`Expected an expression after :`)
+				ParseError(`Expected an expression after :`)
 			}
 
 			tree.C = append(tree.C, t)
@@ -365,11 +365,11 @@ func Expression() Tree {
 				last_token.Value = last_token.Value.(string)[0 : len(last_token.Value.(string))-1]
 				op := last_token
 				ov := tree
-				tree = MakeTree(Token{Type: TOKEN_EQUAL, Value: "="}, tree)
+				tree = MakeTree(Token{Type: TOKEN_EQUAL, Value: "=", Col: last_token.Col, Line: last_token.Line}, tree)
 
 				t := Expression()
 				if IsNoTree(t) {
-					Error(`Expected an expression after operator`)
+					ParseError(`Expected an expression after operator`)
 				}
 
 				tree.C = append(tree.C, MakeTree(op, ov, t))
@@ -378,7 +378,7 @@ func Expression() Tree {
 
 				t := Expression()
 				if IsNoTree(t) {
-					Error(`Expected an expression after operator`)
+					ParseError(`Expected an expression after operator`)
 				}
 
 				tree.C = append(tree.C, t)
@@ -404,7 +404,7 @@ func Statement() Tree {
 		for Accept(TOKEN_COMMA) {
 			e := Expression()
 			if IsNoTree(e) {
-				Error(`expected expression after ,`)
+				ParseError(`expected expression after ,`)
 			}
 
 			init.C = append(init.C, e)
@@ -419,7 +419,7 @@ func Statement() Tree {
 		for Accept(TOKEN_COMMA) {
 			e := Expression()
 			if IsNoTree(e) {
-				Error(`expected expression after ,`)
+				ParseError(`expected expression after ,`)
 			}
 
 			inc.C = append(inc.C, e)
@@ -439,7 +439,7 @@ func Statement() Tree {
 
 		condition := Expression()
 		if IsNoTree(condition) {
-			Error(`while condition cannot be empty`)
+			ParseError(`while condition cannot be empty`)
 		}
 
 		tree.C = append(tree.C, condition)
@@ -455,7 +455,7 @@ func Statement() Tree {
 
 		e := Expression()
 		if !IsNoTree(e) {
-			Error(`error: unexpected expression`)
+			ParseError(`error: unexpected expression`)
 		}
 
 		return tree
@@ -495,7 +495,7 @@ func IfTree() Tree {
 
 	condition := Expression()
 	if IsNoTree(condition) {
-		Error("expected an expression after if")
+		ParseError("expected an expression after if")
 	}
 
 	Expect(TOKEN_OPEN_BRACE)
@@ -533,7 +533,7 @@ func Parse(tokens []Token) Tree {
 	Next()
 	tree := Block()
 	if parser_token_index < len(parser_tokens) {
-		Error("Unexpected token: %v", current_token.Line, current_token.Col, current_token.Value)
+		ParseError("unexpected token: %v", current_token.Value)
 	}
 	return tree
 }

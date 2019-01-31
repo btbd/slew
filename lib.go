@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"github.com/JamesHovious/w32"
 	"golang.org/x/sys/windows"
-	"golang.org/x/text/encoding/unicode"
 	"io"
 	"io/ioutil"
 	"math"
@@ -16,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -36,6 +36,33 @@ func global_len(this *Variable, args []Variable) Variable {
 	}
 
 	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func global_type(this *Variable, args []Variable) Variable {
+	s := "unknown"
+
+	if len(args) > 0 {
+		switch args[0].Type {
+		case VAR_NUMBER:
+			s = "number"
+			break
+		case VAR_STRING:
+			s = "string"
+			break
+		case VAR_FUNCTION:
+		case VAR_NFUNCTION:
+			s = "function"
+			break
+		case VAR_ARRAY:
+			s = "array"
+			break
+		case VAR_OBJECT:
+			s = "object"
+			break
+		}
+	}
+
+	return MakeVariable(VAR_STRING, s)
 }
 
 /***********************************************/
@@ -113,6 +140,44 @@ func array_Remove(this *Variable, args []Variable) Variable {
 			r := arr[index]
 			*ptr = append(arr[:index], arr[index+1:]...)
 			return r
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func array_Sort(this *Variable, args []Variable) Variable {
+	if l := len(args); l > 1 && args[0].Type == VAR_ARRAY && args[1].Type == VAR_FUNCTION {
+		a := *args[0].Value.(*[]Variable)
+		f := args[1]
+		sort.SliceStable(a, func(i int, j int) bool {
+			v := CallUserFunc(&f, []Variable{a[i], a[j]})
+			return !(v.Type == VAR_NUMBER && v.Value.(float64) > 0)
+		})
+	}
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func array_Find(this *Variable, args []Variable) Variable {
+	if len(args) > 1 && args[0].Type == VAR_ARRAY && args[1].Type == VAR_FUNCTION {
+		f := args[1]
+		for _, v := range *args[0].Value.(*[]Variable) {
+			if r := CallUserFunc(&f, []Variable{v}); r.Type != VAR_NUMBER || r.Value.(float64) != 0 {
+				return v
+			}
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func array_Each(this *Variable, args []Variable) Variable {
+	if len(args) > 1 && args[0].Type == VAR_ARRAY && args[1].Type == VAR_FUNCTION {
+		f := args[1]
+		for i, v := range *args[0].Value.(*[]Variable) {
+			if r := CallUserFunc(&f, []Variable{v, MakeVariable(VAR_NUMBER, float64(i))}); r.Type != VAR_NUMBER || r.Value.(float64) != 0 {
+				break
+			}
 		}
 	}
 
@@ -813,7 +878,90 @@ func thread_Create(this *Variable, args []Variable) Variable {
 /***********************************************/
 /*                     winapi                  */
 /***********************************************/
-var procIsWow64Process, procReadProcessMemory, procWriteProcessMemory, procMapVirtualKey, procTimeGetTime *syscall.Proc
+var procCreateRemoteThread, procGetCurrentProcessId, procIsWow64Process, procReadProcessMemory, procWriteProcessMemory, procMapVirtualKey, procVkKeyScanA, procTimeGetTime, procNtSuspendProcess, procNtResumeProcess, procVirtualQueryEx, procOpenThread, procSuspendThread, procResumeThread, procThread32First, procThread32Next, procWow64GetThreadContext, procWow64GetThreadSelectorEntry, procGetThreadTimes, procNtQueryInformationThread *syscall.Proc
+
+type MEMORY_BASIC_INFORMATION struct {
+	BaseAddress       w32.PVOID
+	AllocationBase    w32.PVOID
+	AllocationProtect w32.DWORD
+	RegionSize        w32.SIZE_T
+	State             w32.DWORD
+	Protect           w32.DWORD
+	Type              w32.DWORD
+}
+
+type THREADENTRY32 struct {
+	DwSize             w32.DWORD
+	CntUsage           w32.DWORD
+	Th32ThreadID       w32.DWORD
+	Th32OwnerProcessID w32.DWORD
+	TpBasePri          w32.DWORD
+	TpDeltaPri         w32.DWORD
+	DwFlags            w32.DWORD
+}
+
+type WOW64_FLOATING_SAVE_AREA struct {
+	ControlWord   w32.DWORD
+	StatusWord    w32.DWORD
+	TagWord       w32.DWORD
+	ErrorOffset   w32.DWORD
+	ErrorSelector w32.DWORD
+	DataOffset    w32.DWORD
+	DataSelector  w32.DWORD
+	RegisterArea  [80]byte
+	Cr0NpxState   w32.DWORD
+}
+
+type WOW64_CONTEXT struct {
+	ContextFlags      w32.DWORD
+	Dr0               w32.DWORD
+	Dr1               w32.DWORD
+	Dr2               w32.DWORD
+	Dr3               w32.DWORD
+	Dr6               w32.DWORD
+	Dr7               w32.DWORD
+	FloatSave         WOW64_FLOATING_SAVE_AREA
+	SegGs             w32.DWORD
+	SegFs             w32.DWORD
+	SegEs             w32.DWORD
+	SegDs             w32.DWORD
+	Edi               w32.DWORD
+	Esi               w32.DWORD
+	Ebx               w32.DWORD
+	Edx               w32.DWORD
+	Ecx               w32.DWORD
+	Eax               w32.DWORD
+	Ebp               w32.DWORD
+	Eip               w32.DWORD
+	SegCs             w32.DWORD
+	EFlags            w32.DWORD
+	Esp               w32.DWORD
+	SegSs             w32.DWORD
+	ExtendedRegisters [512]byte
+}
+
+type WOW64_LDT_ENTRY struct {
+	LimitLow uint16
+	BaseLow  uint16
+	BaseMid  byte
+	Flags1   byte
+	Flags2   byte
+	BaseHi   byte
+}
+
+type CLIENT_ID struct {
+	UniqueProcess w32.PVOID
+	UniqueThread  w32.PVOID
+}
+
+type THREAD_BASIC_INFORMATION struct {
+	ExitStatus     w32.DWORD
+	TebBaseAddress w32.PVOID
+	ClientId       CLIENT_ID
+	AffinityMask   w32.ULONG_PTR
+	Priority       w32.DWORD
+	BasePriority   w32.DWORD
+}
 
 func IsErrSuccess(err error) bool {
 	if e, ok := err.(syscall.Errno); ok {
@@ -825,18 +973,29 @@ func IsErrSuccess(err error) bool {
 	return false
 }
 
+func GetCurrentProcessId() uint {
+	r, _, err := procGetCurrentProcessId.Call()
+	if !IsErrSuccess(err) {
+		return 0
+	}
+
+	return uint(r)
+}
+
 func IsWow64Process(hProcess w32.HANDLE, out *bool) {
 	procIsWow64Process.Call(uintptr(hProcess), uintptr(unsafe.Pointer(out)))
 }
 
 func ReadProcessMemory(hProcess w32.HANDLE, lpBaseAddress uintptr, size uint) (data []byte, err error) {
 	data = make([]byte, size)
-	_, _, err = procReadProcessMemory.Call(uintptr(hProcess), lpBaseAddress, uintptr(unsafe.Pointer(&data[0])), uintptr(size), uintptr(0))
+	read := uint(0)
+	_, _, err = procReadProcessMemory.Call(uintptr(hProcess), lpBaseAddress, uintptr(unsafe.Pointer(&data[0])), uintptr(size), uintptr(unsafe.Pointer(&read)))
 	if !IsErrSuccess(err) {
 		return
 	}
 
 	err = nil
+
 	return
 }
 
@@ -859,6 +1018,15 @@ func MapVirtualKey(k uint, t uint) uint16 {
 	return uint16(r)
 }
 
+func VkKeyScanA(k byte) uint16 {
+	r, _, err := procVkKeyScanA.Call(uintptr(k))
+	if !IsErrSuccess(err) {
+		return 0
+	}
+
+	return uint16(r)
+}
+
 func TimeGetTime() uint {
 	r, _, err := procTimeGetTime.Call()
 	if !IsErrSuccess(err) {
@@ -868,17 +1036,131 @@ func TimeGetTime() uint {
 	return uint(r)
 }
 
-func WCharToString(wchar []uint16) string {
-	if len(wchar) > 0 {
-		out, err := unicode.UTF16(unicode.LittleEndian, unicode.UseBOM).NewDecoder().Bytes(*(*[]byte)(unsafe.Pointer(&wchar)))
-		if err == nil {
-			if i := bytes.IndexByte(out, 0); i > -1 {
-				return string(out[:i])
+func NtSuspendProcess(h w32.HANDLE) {
+	procNtSuspendProcess.Call(uintptr(h))
+}
+
+func NtResumeProcess(h w32.HANDLE) {
+	procNtResumeProcess.Call(uintptr(h))
+}
+
+func VirtualQueryEx(h w32.HANDLE, a w32.LPCVOID, b uintptr, l w32.SIZE_T) int {
+	r, _, err := procVirtualQueryEx.Call(uintptr(h), uintptr(a), b, uintptr(l))
+	if !IsErrSuccess(err) {
+		return 0
+	}
+
+	return int(w32.SIZE_T(r))
+}
+
+func OpenThread(a w32.DWORD, i w32.BOOL, id w32.DWORD) w32.HANDLE {
+	r, _, err := procOpenThread.Call(uintptr(a), uintptr(i), uintptr(id))
+	if !IsErrSuccess(err) {
+		return 0
+	}
+
+	return w32.HANDLE(r)
+}
+
+func SuspendThread(h w32.HANDLE) bool {
+	_, _, err := procSuspendThread.Call(uintptr(h))
+	if !IsErrSuccess(err) {
+		return false
+	}
+
+	return true
+}
+
+func ResumeThread(h w32.HANDLE) bool {
+	_, _, err := procResumeThread.Call(uintptr(h))
+	if !IsErrSuccess(err) {
+		return false
+	}
+
+	return true
+}
+
+func Thread32First(h w32.HANDLE, te *THREADENTRY32) bool {
+	r, _, err := procThread32First.Call(uintptr(h), uintptr(unsafe.Pointer(te)))
+	if !IsErrSuccess(err) {
+		return false
+	}
+
+	return int(r) > 0
+}
+
+func Thread32Next(h w32.HANDLE, te *THREADENTRY32) bool {
+	r, _, err := procThread32Next.Call(uintptr(h), uintptr(unsafe.Pointer(te)))
+	if !IsErrSuccess(err) {
+		return false
+	}
+
+	return int(r) > 0
+}
+
+func Wow64GetThreadContext(h w32.HANDLE, pc *WOW64_CONTEXT) bool {
+	r, _, err := procWow64GetThreadContext.Call(uintptr(h), uintptr(unsafe.Pointer(pc)))
+	if !IsErrSuccess(err) {
+		return false
+	}
+
+	return int(r) > 0
+}
+
+func Wow64GetThreadSelectorEntry(h w32.HANDLE, s w32.DWORD, se *WOW64_LDT_ENTRY) bool {
+	r, _, err := procWow64GetThreadSelectorEntry.Call(uintptr(h), uintptr(s), uintptr(unsafe.Pointer(se)))
+	if !IsErrSuccess(err) {
+		return false
+	}
+
+	return int(r) > 0
+}
+
+func GetThreadCreationTime(h w32.HANDLE) int64 {
+	var filetime, idle windows.Filetime
+	pidle := uintptr(unsafe.Pointer(&idle))
+	r, _, err := procGetThreadTimes.Call(uintptr(h), uintptr(unsafe.Pointer(&filetime)), pidle, pidle, pidle)
+	if !IsErrSuccess(err) || r == 0 {
+		return 0
+	}
+
+	return filetime.Nanoseconds()
+}
+
+func NtQueryInformationThread(h w32.HANDLE, ic int32, ti *THREAD_BASIC_INFORMATION) {
+	procNtQueryInformationThread.Call(uintptr(h), uintptr(ic), uintptr(unsafe.Pointer(ti)), uintptr(unsafe.Sizeof(*ti)), uintptr(0))
+}
+
+func GetModuleInfoByName(pid uint32, name string) w32.MODULEENTRY32 {
+	snapshot := w32.CreateToolhelp32Snapshot(w32.TH32CS_SNAPMODULE|w32.TH32CS_SNAPMODULE32, pid)
+	if snapshot != 0 {
+		defer w32.CloseHandle(snapshot)
+
+		var entry w32.MODULEENTRY32
+		entry.Size = uint32(unsafe.Sizeof(entry))
+
+		if w32.Module32First(snapshot, &entry) {
+			c := true
+			for c {
+				if strings.EqualFold(windows.UTF16ToString(entry.SzModule[:]), name) {
+					return entry
+				}
+
+				c = w32.Module32Next(snapshot, &entry)
 			}
 		}
 	}
 
-	return ""
+	return w32.MODULEENTRY32{}
+}
+
+func CreateRemoteThread(h w32.HANDLE, addr uintptr, arg uintptr) w32.HANDLE {
+	r, _, err := procCreateRemoteThread.Call(uintptr(h), uintptr(0), uintptr(0), addr, arg, uintptr(0), uintptr(0))
+	if !IsErrSuccess(err) {
+		return 0
+	}
+
+	return w32.HANDLE(r)
 }
 
 /***********************************************/
@@ -915,7 +1197,19 @@ func process_Open(this *Variable, args []Variable) Variable {
 	wow64 := false
 
 	if len(args) > 0 {
+		var comp func(windows.ProcessEntry32) bool
 		if v := args[0]; v.Type == VAR_STRING {
+			comp = func(entry windows.ProcessEntry32) bool {
+				return strings.EqualFold(windows.UTF16ToString(entry.ExeFile[:]), v.Value.(string))
+			}
+		} else if v.Type == VAR_NUMBER {
+			comp = func(entry windows.ProcessEntry32) bool {
+				return entry.ProcessID == uint32(v.Value.(float64))
+			}
+		}
+
+		if comp != nil {
+			// Use a snapshot even if given the PID to get extra information on the process
 			snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 			if err == nil {
 				var entry windows.ProcessEntry32
@@ -924,7 +1218,7 @@ func process_Open(this *Variable, args []Variable) Variable {
 				if windows.Process32First(snapshot, &entry) == nil {
 					var c error
 					for c == nil {
-						if strings.EqualFold(WCharToString(entry.ExeFile[:]), v.Value.(string)) {
+						if comp(entry) {
 							id = int(entry.ProcessID)
 							AddProp(&p, "Size", MakeVariable(VAR_NUMBER, float64(entry.Size)))
 							AddProp(&p, "Usage", MakeVariable(VAR_NUMBER, float64(entry.Usage)))
@@ -933,7 +1227,7 @@ func process_Open(this *Variable, args []Variable) Variable {
 							AddProp(&p, "ParentId", MakeVariable(VAR_NUMBER, float64(entry.ParentProcessID)))
 							AddProp(&p, "PriClassBase", MakeVariable(VAR_NUMBER, float64(entry.PriClassBase)))
 							AddProp(&p, "Flags", MakeVariable(VAR_NUMBER, float64(entry.Flags)))
-							AddProp(&p, "Name", MakeVariable(VAR_STRING, WCharToString(entry.ExeFile[:])))
+							AddProp(&p, "Name", MakeVariable(VAR_STRING, windows.UTF16ToString(entry.ExeFile[:])))
 							break
 						}
 
@@ -943,27 +1237,31 @@ func process_Open(this *Variable, args []Variable) Variable {
 
 				windows.CloseHandle(snapshot)
 			}
-		} else if v.Type == VAR_NUMBER {
-			id = int(v.Value.(float64))
-		}
 
-		if id != -1 {
-			handle, _ = w32.OpenProcess(w32.PROCESS_ALL_ACCESS, false, uint32(id))
-			if handle != 0 {
-				IsWow64Process(handle, &wow64)
+			if id != -1 {
+				handle, _ = w32.OpenProcess(w32.PROCESS_ALL_ACCESS, false, uint32(id))
+				if handle != 0 {
+					IsWow64Process(handle, &wow64)
+				}
 			}
 		}
 	}
 
 	AddProp(&p, "Handle", MakeVariable(VAR_NUMBER, float64(handle)))
 	AddProp(&p, "Id", MakeVariable(VAR_NUMBER, float64(id)))
+	AddProp(&p, "Suspend", MakeVariable(VAR_NFUNCTION, process_Suspend))
+	AddProp(&p, "Resume", MakeVariable(VAR_NFUNCTION, process_Resume))
 	if wow64 {
 		AddProp(&p, "Wow64", MakeVariable(VAR_NUMBER, float64(1)))
 		AddProp(&p, "ReadPointer", MakeVariable(VAR_NFUNCTION, process_ReadPointer32))
+		AddProp(&p, "LoadLibrary", MakeVariable(VAR_NFUNCTION, process_LoadLibrary32))
+
 	} else {
 		AddProp(&p, "Wow64", MakeVariable(VAR_NUMBER, float64(0)))
 		AddProp(&p, "ReadPointer", MakeVariable(VAR_NFUNCTION, process_ReadPointer64))
+		AddProp(&p, "LoadLibrary", MakeVariable(VAR_NFUNCTION, process_LoadLibrary64))
 	}
+	AddProp(&p, "FindPattern", MakeVariable(VAR_NFUNCTION, process_FindPattern))
 	AddProp(&p, "Read", MakeVariable(VAR_NFUNCTION, process_Read))
 	AddProp(&p, "Write", MakeVariable(VAR_NFUNCTION, process_Write))
 	AddProp(&p, "ReadInt", MakeVariable(VAR_NFUNCTION, process_ReadInt))
@@ -987,6 +1285,7 @@ func process_Open(this *Variable, args []Variable) Variable {
 	AddProp(&p, "ReadDouble", MakeVariable(VAR_NFUNCTION, process_ReadDouble))
 	AddProp(&p, "WriteDouble", MakeVariable(VAR_NFUNCTION, process_WriteDouble))
 	AddProp(&p, "Modules", MakeVariable(VAR_NFUNCTION, process_Modules))
+	AddProp(&p, "Threads", MakeVariable(VAR_NFUNCTION, process_Threads))
 	AddProp(&p, "Close", MakeVariable(VAR_NFUNCTION, process_Close))
 	AddProp(&p, "Kill", MakeVariable(VAR_NFUNCTION, process_Kill))
 	return p
@@ -1012,7 +1311,7 @@ func process_List(this *Variable, args []Variable) Variable {
 				AddProp(&p, "ParentId", MakeVariable(VAR_NUMBER, float64(entry.ParentProcessID)))
 				AddProp(&p, "PriClassBase", MakeVariable(VAR_NUMBER, float64(entry.PriClassBase)))
 				AddProp(&p, "Flags", MakeVariable(VAR_NUMBER, float64(entry.Flags)))
-				AddProp(&p, "Name", MakeVariable(VAR_STRING, WCharToString(entry.ExeFile[:])))
+				AddProp(&p, "Name", MakeVariable(VAR_STRING, windows.UTF16ToString(entry.ExeFile[:])))
 				r = append(r, p)
 				c = windows.Process32Next(snapshot, &entry)
 			}
@@ -1036,36 +1335,285 @@ func GetProcessHandle(this *Variable) (handle w32.HANDLE) {
 	return
 }
 
+func process_Suspend(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 {
+		NtSuspendProcess(h)
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func process_Resume(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 {
+		NtResumeProcess(h)
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
 func process_Modules(this *Variable, args []Variable) Variable {
 	var modules []Variable
 
 	if this != nil {
 		if p := *this; p.Type == VAR_OBJECT {
 			if v, ok := (*p.Value.(*map[string]*Variable))["Id"]; ok && v.Type == VAR_NUMBER {
-				snapshot := w32.CreateToolhelp32Snapshot(w32.TH32CS_SNAPMODULE|w32.TH32CS_SNAPMODULE32, uint32(v.Value.(float64)))
-				if snapshot != 0 {
-					var entry w32.MODULEENTRY32
-					entry.Size = uint32(unsafe.Sizeof(entry))
+				id := uint32(v.Value.(float64))
+				if len(args) > 0 && args[0].Type == VAR_STRING {
+					entry := GetModuleInfoByName(id, args[0].Value.(string))
+					m := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
+					AddProp(&m, "Size", MakeVariable(VAR_NUMBER, float64(entry.ModBaseSize)))
+					AddProp(&m, "Base", MakeVariable(VAR_NUMBER, float64(uintptr(unsafe.Pointer(entry.ModBaseAddr)))))
+					AddProp(&m, "Name", MakeVariable(VAR_STRING, windows.UTF16ToString(entry.SzModule[:])))
+					return m
+				} else {
+					snapshot := w32.CreateToolhelp32Snapshot(w32.TH32CS_SNAPMODULE|w32.TH32CS_SNAPMODULE32, id)
+					if snapshot != 0 {
+						var entry w32.MODULEENTRY32
+						entry.Size = uint32(unsafe.Sizeof(entry))
 
-					if w32.Module32First(snapshot, &entry) {
-						c := true
-						for c {
-							m := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
-							AddProp(&m, "Size", MakeVariable(VAR_NUMBER, float64(entry.Size)))
-							AddProp(&m, "Base", MakeVariable(VAR_NUMBER, float64(uintptr(unsafe.Pointer(entry.ModBaseAddr)))))
-							AddProp(&m, "Name", MakeVariable(VAR_STRING, WCharToString(entry.SzModule[:])))
-							modules = append(modules, m)
-							c = w32.Module32Next(snapshot, &entry)
+						if w32.Module32First(snapshot, &entry) {
+							c := true
+							for c {
+								m := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
+								AddProp(&m, "Size", MakeVariable(VAR_NUMBER, float64(entry.ModBaseSize)))
+								AddProp(&m, "Base", MakeVariable(VAR_NUMBER, float64(uintptr(unsafe.Pointer(entry.ModBaseAddr)))))
+								AddProp(&m, "Name", MakeVariable(VAR_STRING, windows.UTF16ToString(entry.SzModule[:])))
+								modules = append(modules, m)
+								c = w32.Module32Next(snapshot, &entry)
+							}
 						}
-					}
 
-					w32.CloseHandle(snapshot)
+						w32.CloseHandle(snapshot)
+					}
 				}
 			}
 		}
 	}
 
 	return MakeVariable(VAR_ARRAY, &modules)
+}
+
+func GetThreadStackTop32(process w32.HANDLE, thread w32.HANDLE) uint64 {
+	if SuspendThread(thread) {
+		defer ResumeThread(thread)
+
+		var context WOW64_CONTEXT
+		context.ContextFlags = 0x00010000 | 0x00000004
+
+		if Wow64GetThreadContext(thread, &context) {
+			var entry WOW64_LDT_ENTRY
+			if Wow64GetThreadSelectorEntry(thread, context.SegFs, &entry) {
+				stack := uint32(entry.BaseLow) + (uint32(entry.BaseMid) << 16) + (uint32(entry.BaseHi) << 24) + 4
+
+				if data, err := ReadProcessMemory(process, uintptr(stack), 4); err == nil {
+					return uint64(*(*uint32)(unsafe.Pointer(&data[0]))) - 4
+				}
+			}
+		}
+	}
+
+	return 0
+}
+
+func GetThreadStackTop64(process w32.HANDLE, thread w32.HANDLE) uint64 {
+	if SuspendThread(thread) {
+		defer ResumeThread(thread)
+
+		var tbi THREAD_BASIC_INFORMATION
+		NtQueryInformationThread(thread, 0, &tbi)
+		if addr := uint64(uintptr(unsafe.Pointer(tbi.TebBaseAddress))); addr != 0 {
+			if data, err := ReadProcessMemory(process, uintptr(uint64(addr)+8), 8); err == nil {
+				return (*(*uint64)(unsafe.Pointer(&data[0]))) - 8
+			}
+		}
+	}
+
+	return 0
+}
+
+func GetThreadStack32(process w32.HANDLE, pid w32.DWORD, thread w32.HANDLE) uint64 {
+	kernel32 := GetModuleInfoByName(uint32(pid), "kernel32.dll")
+	min := uint64(uintptr(unsafe.Pointer(kernel32.ModBaseAddr)))
+	max := min + uint64(kernel32.ModBaseSize)
+
+	if top := GetThreadStackTop32(process, thread); top != 0 {
+		for {
+			if data, err := ReadProcessMemory(process, uintptr(top), 4); err == nil {
+				if stack := uint64(*(*uint32)(unsafe.Pointer(&data[0]))); stack >= min && stack < max {
+					return top
+				}
+			} else {
+				break
+			}
+
+			top -= 4
+		}
+	}
+
+	return 0
+}
+
+func GetThreadStack64(process w32.HANDLE, pid w32.DWORD, thread w32.HANDLE) uint64 {
+	kernel32 := GetModuleInfoByName(uint32(pid), "kernel32.dll")
+	min := uint64(uintptr(unsafe.Pointer(kernel32.ModBaseAddr)))
+	max := min + uint64(kernel32.ModBaseSize)
+
+	if top := GetThreadStackTop64(process, thread); top != 0 {
+		for {
+			if data, err := ReadProcessMemory(process, uintptr(top), 8); err == nil {
+				if stack := (*(*uint64)(unsafe.Pointer(&data[0]))); stack >= min && stack < max {
+					return top
+				}
+			} else {
+				break
+			}
+
+			top -= 8
+		}
+	}
+
+	return 0
+}
+
+func process_Threads(this *Variable, args []Variable) Variable {
+	var threads []Variable
+
+	if process := GetProcessHandle(this); process != 0 {
+		m := *(*this).Value.(*map[string]*Variable)
+		if v, ok := m["Id"]; ok && v.Type == VAR_NUMBER {
+			id := w32.DWORD(v.Value.(float64))
+			snapshot := w32.CreateToolhelp32Snapshot(w32.TH32CS_SNAPTHREAD, 0)
+			if snapshot != 0 {
+				var entry THREADENTRY32
+				entry.DwSize = w32.DWORD(unsafe.Sizeof(entry))
+
+				if Thread32First(snapshot, &entry) {
+					c := true
+					for c {
+						if entry.Th32OwnerProcessID == id {
+							t := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
+							AddProp(&t, "Id", MakeVariable(VAR_NUMBER, float64(entry.Th32ThreadID)))
+							AddProp(&t, "Owner", MakeVariable(VAR_NUMBER, float64(entry.Th32ThreadID)))
+							AddProp(&t, "Priority", MakeVariable(VAR_NUMBER, float64(entry.TpBasePri)))
+
+							time := int64(0)
+							stack := uint64(0)
+							if handle := OpenThread(0x0008|0x0002|0x0040, w32.BOOL(0), entry.Th32ThreadID); handle != 0 {
+								time = GetThreadCreationTime(handle)
+								if v, ok := m["Wow64"]; ok && v.Type == VAR_NUMBER {
+									if i := int(v.Value.(float64)); i == 0 || i == 1 {
+										funcs := [](func(w32.HANDLE, w32.DWORD, w32.HANDLE) uint64){GetThreadStack64, GetThreadStack32}
+										stack = funcs[i](process, id, handle)
+									}
+								}
+								w32.CloseHandle(handle)
+							}
+							AddProp(&t, "CreationTime", MakeVariable(VAR_NUMBER, float64(time)))
+							AddProp(&t, "Stack", MakeVariable(VAR_NUMBER, float64(stack)))
+							AddProp(&t, "Suspend", MakeVariable(VAR_NFUNCTION, thread_Suspend))
+							AddProp(&t, "Resume", MakeVariable(VAR_NFUNCTION, thread_Resume))
+
+							threads = append(threads, t)
+						}
+						c = Thread32Next(snapshot, &entry)
+					}
+				}
+			}
+		}
+	}
+
+	sort.SliceStable(threads, func(i, j int) bool {
+		return (*(*threads[i].Value.(*map[string]*Variable))["CreationTime"]).Value.(float64) < (*(*threads[j].Value.(*map[string]*Variable))["CreationTime"]).Value.(float64)
+	})
+
+	return MakeVariable(VAR_ARRAY, &threads)
+}
+
+func process_LoadLibrary32(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 && len(args) > 0 && args[0].Type == VAR_STRING {
+		if v, ok := (*(*this).Value.(*map[string]*Variable))["Id"]; ok && v.Type == VAR_NUMBER {
+			path := make([]uint16, 0xFF)
+			windows.GetFullPathName(windows.StringToUTF16Ptr(args[0].Value.(string)), 0xFF, (*uint16)(unsafe.Pointer(&path[0])), nil)
+
+			mod := GetModuleInfoByName(uint32(v.Value.(float64)), "kernelbase.dll")
+			proc := uint32(FindPattern(h, []byte{0x83, 0xEC, 0x1C, 0x53, 0x56, 0x57, 0x85, 0xC0}, []byte("xxxxxxxx"), uint64(uintptr(unsafe.Pointer(mod.ModBaseAddr))), uint64(mod.ModBaseSize)))
+
+			if proc != 0 {
+				proc -= 17
+				if WriteProcessMemory(h, uintptr(proc), uintptr(unsafe.Pointer(&([]byte{0x8B, 0xFF, 0x55, 0x8B, 0xEC, 0x5D}[0]))), 6) == nil {
+					if arg, err := w32.VirtualAllocEx(h, 0, 510, w32.MEM_RESERVE|w32.MEM_COMMIT, w32.PAGE_EXECUTE_READWRITE); err == nil && WriteProcessMemory(h, arg, uintptr(unsafe.Pointer(&path[0])), 510) == nil {
+						if stub, err := w32.VirtualAllocEx(h, 0, 0xFF, w32.MEM_RESERVE|w32.MEM_COMMIT, w32.PAGE_EXECUTE_READWRITE); err == nil {
+							b := []byte{0x6A, 0x00, 0x6A, 0x00, 0x68, 0x00, 0x00, 0x00, 0x00, 0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3}
+							*(*uint32)(unsafe.Pointer(&b[5])) = uint32(arg)
+							*(*uint32)(unsafe.Pointer(&b[10])) = uint32(proc) - (uint32(stub) + 14)
+							if WriteProcessMemory(h, stub, uintptr(unsafe.Pointer(&b[0])), uint(len(b))) == nil {
+								if thread := CreateRemoteThread(h, stub, 0); thread != 0 {
+									windows.WaitForSingleObject(windows.Handle(thread), w32.INFINITE)
+									w32.CloseHandle(thread)
+								}
+							}
+							w32.VirtualFreeEx(h, stub, 0, w32.MEM_RELEASE|w32.MEM_DECOMMIT)
+						}
+						w32.VirtualFreeEx(h, arg, 0, w32.MEM_RELEASE|w32.MEM_DECOMMIT)
+					}
+				}
+			}
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func process_LoadLibrary64(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 && len(args) > 0 && args[0].Type == VAR_STRING {
+		path := make([]uint16, 0xFF)
+		windows.GetFullPathName(windows.StringToUTF16Ptr(args[0].Value.(string)), 0xFF, (*uint16)(unsafe.Pointer(&path[0])), nil)
+
+		dll := syscall.MustLoadDLL("kernel32.dll")
+		addr, _ := windows.GetProcAddress(windows.Handle(dll.Handle), "LoadLibraryW")
+		dll.Release()
+
+		arg, err := w32.VirtualAllocEx(h, 0, 510, w32.MEM_RESERVE|w32.MEM_COMMIT, w32.PAGE_EXECUTE_READWRITE)
+		if err == nil && WriteProcessMemory(h, arg, uintptr(unsafe.Pointer(&path[0])), 510) == nil {
+			if thread := CreateRemoteThread(h, addr, arg); thread != 0 {
+				windows.WaitForSingleObject(windows.Handle(thread), w32.INFINITE)
+				w32.VirtualFreeEx(h, arg, 0, w32.MEM_RELEASE|w32.MEM_DECOMMIT)
+				w32.CloseHandle(thread)
+			}
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func thread_Suspend(this *Variable, args []Variable) Variable {
+	if this != nil {
+		if p := *this; p.Type == VAR_OBJECT {
+			if v, ok := (*p.Value.(*map[string]*Variable))["Id"]; ok && v.Type == VAR_NUMBER {
+				if handle := OpenThread(0x0002, w32.BOOL(0), w32.DWORD(v.Value.(float64))); handle != 0 {
+					SuspendThread(handle)
+					w32.CloseHandle(handle)
+				}
+			}
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func thread_Resume(this *Variable, args []Variable) Variable {
+	if this != nil {
+		if p := *this; p.Type == VAR_OBJECT {
+			if v, ok := (*p.Value.(*map[string]*Variable))["Id"]; ok && v.Type == VAR_NUMBER {
+				if handle := OpenThread(0x0002, w32.BOOL(0), w32.DWORD(v.Value.(float64))); handle != 0 {
+					ResumeThread(handle)
+					w32.CloseHandle(handle)
+				}
+			}
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
 }
 
 func process_Close(this *Variable, args []Variable) Variable {
@@ -1079,6 +1627,84 @@ func process_Close(this *Variable, args []Variable) Variable {
 func process_Kill(this *Variable, args []Variable) Variable {
 	if h := GetProcessHandle(this); h != 0 {
 		w32.TerminateProcess(h, 0)
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func MaskCompare(a []byte, b []byte, mask []byte) bool {
+	for i := 0; i < len(mask); i++ {
+		if mask[i] == byte('x') && a[i] != b[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+func FindPattern(handle w32.HANDLE, pattern []byte, mask []byte, min uint64, size uint64) uint64 {
+	max := uint64(0x7FFFFFFFFFFF)
+	if size != 0 {
+		max = min + size
+	}
+
+	var mi MEMORY_BASIC_INFORMATION
+	base := uintptr(min)
+	for base < uintptr(max) && VirtualQueryEx(handle, w32.LPCVOID(base), uintptr(unsafe.Pointer(&mi)), w32.SIZE_T(unsafe.Sizeof(mi))) != 0 {
+		if mi.State&(w32.MEM_COMMIT|w32.MEM_RESERVE) != 0 {
+			if data, err := ReadProcessMemory(handle, uintptr(mi.BaseAddress), uint(mi.RegionSize)); err == nil {
+				for i := 0; i < len(data)-len(mask); i++ {
+					if MaskCompare(data[i:], pattern, mask) {
+						return uint64(uintptr(mi.BaseAddress)) + uint64(i)
+					}
+				}
+			}
+		}
+		base += uintptr(mi.RegionSize)
+	}
+
+	return 0
+}
+
+func process_FindPattern(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 {
+		if l := len(args); l == 1 && args[0].Type == VAR_STRING {
+			if v := strings.Replace(args[0].Value.(string), " ", "", -1); len(v)%2 == 0 {
+				var pattern []byte
+				var mask []byte
+
+				for i := 0; i < len(v); i += 2 {
+					if v[i] == '?' {
+						pattern = append(pattern, 0)
+						mask = append(mask, '?')
+					} else {
+						b, err := strconv.ParseInt(v[i:i+2], 16, 64)
+						if err != nil {
+							return MakeVariable(VAR_NUMBER, float64(0))
+						}
+
+						pattern = append(pattern, byte(b))
+						mask = append(mask, 'x')
+					}
+				}
+
+				return MakeVariable(VAR_NUMBER, float64(FindPattern(h, pattern, mask, 0, 0)))
+			}
+		} else if l > 1 && args[1].Type == VAR_STRING {
+			mask := []byte(args[1].Value.(string))
+			if args[0].Type == VAR_ARRAY {
+				var b []byte
+				for _, e := range *args[0].Value.(*[]Variable) {
+					if e.Type != VAR_NUMBER {
+						return MakeVariable(VAR_NUMBER, float64(0))
+					}
+					b = append(b, byte(e.Value.(float64)))
+				}
+				return MakeVariable(VAR_NUMBER, float64(FindPattern(h, b, mask, 0, 0)))
+			} else if args[0].Type == VAR_STRING {
+				return MakeVariable(VAR_NUMBER, float64(FindPattern(h, []byte(args[0].Value.(string)), mask, 0, 0)))
+			}
+		}
 	}
 
 	return MakeVariable(VAR_NUMBER, float64(0))
@@ -1380,9 +2006,58 @@ func input_IsKeyDown(this *Variable, args []Variable) Variable {
 	return MakeVariable(VAR_NUMBER, float64(1))
 }
 
-/* helper functions */
+func input_SendKeys(this *Variable, args []Variable) Variable {
+	if len(args) > 0 && args[0].Type == VAR_STRING {
+		var inputs []w32.INPUT
 
-func CallUserFunc(v *Variable, args []Variable) {
+		s := args[0].Value.(string)
+		for i := 0; i < len(s); i++ {
+			inp := w32.INPUT{Type: w32.INPUT_KEYBOARD}
+			inp.Ki.WScan = MapVirtualKey(uint(s[i]), w32.MAPVK_VK_TO_VSC)
+			inp.Ki.WVk = uint16(VkKeyScanA(s[i]))
+			inputs = append(inputs, inp)
+			inp.Ki.DwFlags = 2
+			inputs = append(inputs, inp)
+		}
+
+		if len(inputs) > 0 {
+			w32.SendInput(inputs)
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+/***********************************************/
+/*                       proc                  */
+/***********************************************/
+func proc_GetAddress(this *Variable, args []Variable) Variable {
+	var r uintptr
+
+	if len(args) > 1 && args[0].Type == VAR_STRING && args[1].Type == VAR_STRING {
+		dll := syscall.MustLoadDLL(args[0].Value.(string))
+		r, _ = windows.GetProcAddress(windows.Handle(dll.Handle), args[1].Value.(string))
+		dll.Release()
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(r))
+}
+
+func proc_GetRelativeAddress(this *Variable, args []Variable) Variable {
+	var r uintptr
+
+	if len(args) > 1 && args[0].Type == VAR_STRING && args[1].Type == VAR_STRING {
+		dll := syscall.MustLoadDLL(args[0].Value.(string))
+		r, _ = windows.GetProcAddress(windows.Handle(dll.Handle), args[1].Value.(string))
+		r -= uintptr(dll.Handle)
+		dll.Release()
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(r))
+}
+
+/* helper functions */
+func CallUserFunc(v *Variable, args []Variable) Variable {
 	f := v.Value.([]Tree)
 
 	var thread []Stack
@@ -1397,13 +2072,17 @@ func CallUserFunc(v *Variable, args []Variable) {
 		}
 	}
 
+	ret := MakeVariable(VAR_NUMBER, float64(0))
+
 	for _, e := range f[1].C {
 		if v := Eval(e, &thread, stack); v.Type == VAR_RETURN {
+			ret = v.Value.(Variable)
 			break
 		}
 	}
 
 	StackRemove(&thread)
+	return ret
 }
 
 func GetProp(m map[string]*Variable, name string) Variable {
@@ -1423,6 +2102,7 @@ func InitStack() {
 	StackPush("true", nil, -1, MakeVariable(VAR_NUMBER, float64(1)))
 	StackPush("false", nil, -1, MakeVariable(VAR_NUMBER, float64(0)))
 	StackPush("len", nil, -1, MakeVariable(VAR_NFUNCTION, global_len))
+	StackPush("type", nil, -1, MakeVariable(VAR_NFUNCTION, global_type))
 
 	object := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
 	AddProp(&object, "Keys", MakeVariable(VAR_NFUNCTION, object_Keys))
@@ -1433,6 +2113,9 @@ func InitStack() {
 	AddProp(&array, "Pop", MakeVariable(VAR_NFUNCTION, array_Pop))
 	AddProp(&array, "Insert", MakeVariable(VAR_NFUNCTION, array_Insert))
 	AddProp(&array, "Remove", MakeVariable(VAR_NFUNCTION, array_Remove))
+	AddProp(&array, "Sort", MakeVariable(VAR_NFUNCTION, array_Sort))
+	AddProp(&array, "Find", MakeVariable(VAR_NFUNCTION, array_Find))
+	AddProp(&array, "Each", MakeVariable(VAR_NFUNCTION, array_Each))
 	StackPush("array", nil, -1, array)
 
 	console := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
@@ -1521,17 +2204,35 @@ func InitStack() {
 	StackPush("thread", nil, -1, thread)
 
 	dll := syscall.MustLoadDLL("kernel32.dll")
+	procGetCurrentProcessId, _ = dll.FindProc("GetCurrentProcessId")
+	procCreateRemoteThread, _ = dll.FindProc("CreateRemoteThread")
 	procIsWow64Process, _ = dll.FindProc("IsWow64Process")
 	procReadProcessMemory, _ = dll.FindProc("ReadProcessMemory")
 	procWriteProcessMemory, _ = dll.FindProc("WriteProcessMemory")
+	procVirtualQueryEx, _ = dll.FindProc("VirtualQueryEx")
+	procOpenThread, _ = dll.FindProc("OpenThread")
+	procSuspendThread, _ = dll.FindProc("SuspendThread")
+	procResumeThread, _ = dll.FindProc("ResumeThread")
+	procThread32First, _ = dll.FindProc("Thread32First")
+	procThread32Next, _ = dll.FindProc("Thread32Next")
+	procWow64GetThreadContext, _ = dll.FindProc("Wow64GetThreadContext")
+	procWow64GetThreadSelectorEntry, _ = dll.FindProc("Wow64GetThreadSelectorEntry")
+	procGetThreadTimes, _ = dll.FindProc("GetThreadTimes")
 	dll.Release()
 
 	dll = syscall.MustLoadDLL("user32.dll")
 	procMapVirtualKey, _ = dll.FindProc("MapVirtualKeyW")
+	procVkKeyScanA, _ = dll.FindProc("VkKeyScanA")
 	dll.Release()
 
 	dll = syscall.MustLoadDLL("winmm.dll")
 	procTimeGetTime, _ = dll.FindProc("timeGetTime")
+	dll.Release()
+
+	dll = syscall.MustLoadDLL("ntdll.dll")
+	procNtSuspendProcess, _ = dll.FindProc("NtSuspendProcess")
+	procNtResumeProcess, _ = dll.FindProc("NtResumeProcess")
+	procNtQueryInformationThread, _ = dll.FindProc("NtQueryInformationThread")
 	dll.Release()
 
 	date := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
@@ -1542,6 +2243,7 @@ func InitStack() {
 	process := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
 	AddProp(&process, "Open", MakeVariable(VAR_NFUNCTION, process_Open))
 	AddProp(&process, "List", MakeVariable(VAR_NFUNCTION, process_List))
+	AddProp(&process, "Current", process_Open(nil, []Variable{MakeVariable(VAR_NUMBER, float64(GetCurrentProcessId()))}))
 	StackPush("process", nil, -1, process)
 
 	input := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
@@ -1550,7 +2252,13 @@ func InitStack() {
 	AddProp(&input, "KeyDown", MakeVariable(VAR_NFUNCTION, input_KeyDown))
 	AddProp(&input, "KeyUp", MakeVariable(VAR_NFUNCTION, input_KeyUp))
 	AddProp(&input, "IsKeyDown", MakeVariable(VAR_NFUNCTION, input_IsKeyDown))
+	AddProp(&input, "SendKeys", MakeVariable(VAR_NFUNCTION, input_SendKeys))
 	StackPush("input", nil, -1, input)
+
+	proc := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
+	AddProp(&proc, "GetAddress", MakeVariable(VAR_NFUNCTION, proc_GetAddress))
+	AddProp(&proc, "GetRelativeAddress", MakeVariable(VAR_NFUNCTION, proc_GetRelativeAddress))
+	StackPush("proc", nil, -1, proc)
 
 	go func() {
 		w32.SetWindowsHookEx(w32.WH_KEYBOARD_LL, KeyboardHook, 0, 0)
