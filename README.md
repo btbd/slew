@@ -468,7 +468,7 @@ console.Println("Status: " + resp.Status + "\nBody: " + resp.Body);
 
 ### number
 
-`.ToString(number, [base])`
+`.ToString(number [, base])`
 - Returns the base 10, or specified base, string representation of `number`.
 
 `.FromString(string [, base])`
@@ -777,7 +777,7 @@ console.Println(ret);
 `.FromCharCode(code [, code...])`
 - Returns a string created from the specified character codes.
 
-`.FromNumber(number, [base])`
+`.FromNumber(number [, base])`
 - Returns the base 10, or specified base, string representation of `number`.
 
 `.IndexOf(string, substring)`
