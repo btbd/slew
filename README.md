@@ -150,7 +150,7 @@ a := "thing";
 a[0] = "somet";
 console.Println(a);
 
-a += '\x31\u03BC\n"something":\t世界';
+a += '\x31\u03BC\n"something":\t世界\n';
 
 for (i := 0; i < len(a); ++i) {
     console.Print(a[i]);
@@ -308,7 +308,7 @@ Find more examples [here](https://github.com/btbd/slew/tree/master/examples).
         - The URL that receives the request.
 - Example:
 
-```go
+```js
 resp := http.Request({
     URL: "https://somehost.com",
     Body: "some text for the body",
@@ -601,7 +601,7 @@ console.Println("Status: " + resp.Status + "\nBody: " + resp.Body);
     - Returns the specified return value once the virtual thread is complete. If `process.FUNC_RET_NONE` is given, then the function returns immediately.
     - Example:
 
-```go
+```js
 p := process.Open("test.exe"); // test.exe is a 32bit process
 
 ret := p.Call(
