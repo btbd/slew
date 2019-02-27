@@ -6,8 +6,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/JamesHovious/w32"
-	"golang.org/x/sys/windows"
 	"io"
 	"io/ioutil"
 	"math"
@@ -15,19 +13,23 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 	"unsafe"
+
+	"github.com/JamesHovious/w32"
+	"golang.org/x/sys/windows"
 )
 
 func global_len(this *Variable, args []Variable) Variable {
 	if len(args) > 0 {
 		switch args[0].Type {
 		case VAR_STRING:
-			return MakeVariable(VAR_NUMBER, float64(len(args[0].Value.(string))))
+			return MakeVariable(VAR_NUMBER, float64(len([]rune(args[0].Value.(string)))))
 		case VAR_ARRAY:
 			return MakeVariable(VAR_NUMBER, float64(len(*args[0].Value.(*[]Variable))))
 		case VAR_OBJECT:
@@ -45,24 +47,58 @@ func global_type(this *Variable, args []Variable) Variable {
 		switch args[0].Type {
 		case VAR_NUMBER:
 			s = "number"
-			break
 		case VAR_STRING:
 			s = "string"
-			break
 		case VAR_FUNCTION:
+			fallthrough
 		case VAR_NFUNCTION:
 			s = "function"
-			break
 		case VAR_ARRAY:
 			s = "array"
-			break
 		case VAR_OBJECT:
 			s = "object"
-			break
 		}
 	}
 
 	return MakeVariable(VAR_STRING, s)
+}
+
+func Copy(v Variable) Variable {
+	switch v.Type {
+	case VAR_NUMBER:
+		fallthrough
+	case VAR_STRING:
+		fallthrough
+	case VAR_UNKNOWN:
+		fallthrough
+	case VAR_FUNCTION:
+		fallthrough
+	case VAR_NFUNCTION:
+		return v
+	case VAR_ARRAY:
+		var r []Variable
+		for _, e := range *v.Value.(*[]Variable) {
+			r = append(r, Copy(e))
+		}
+		return MakeVariable(VAR_ARRAY, &r)
+	case VAR_OBJECT:
+		m := map[string]*Variable{}
+		for k, v := range *v.Value.(*map[string]*Variable) {
+			cv := Copy(*v)
+			m[k] = &cv
+		}
+		return MakeVariable(VAR_OBJECT, &m)
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func global_copy(this *Variable, args []Variable) Variable {
+	if len(args) > 0 {
+		return Copy(args[0])
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
 }
 
 /***********************************************/
@@ -115,7 +151,7 @@ func array_Insert(this *Variable, args []Variable) Variable {
 		arr := *ptr
 		index := int(args[1].Value.(float64))
 		if l := len(arr); index > -1 && index < l {
-			for i := 2; i < len(args); i++ {
+			for i := len(args) - 1; i > 1; i-- {
 				arr = append(arr[:index], append([]Variable{args[i]}, arr[index:]...)...)
 			}
 		} else if index == l {
@@ -161,8 +197,8 @@ func array_Sort(this *Variable, args []Variable) Variable {
 func array_Find(this *Variable, args []Variable) Variable {
 	if len(args) > 1 && args[0].Type == VAR_ARRAY && args[1].Type == VAR_FUNCTION {
 		f := args[1]
-		for _, v := range *args[0].Value.(*[]Variable) {
-			if r := CallUserFunc(&f, []Variable{v}); r.Type != VAR_NUMBER || r.Value.(float64) != 0 {
+		for i, v := range *args[0].Value.(*[]Variable) {
+			if r := CallUserFunc(&f, []Variable{v, MakeVariable(VAR_NUMBER, float64(i))}); r.Type != VAR_NUMBER || r.Value.(float64) != 0 {
 				return v
 			}
 		}
@@ -200,9 +236,9 @@ func console_Print(this *Variable, args []Variable) Variable {
 }
 
 func console_Println(this *Variable, args []Variable) Variable {
-	r := console_Print(this, args)
+	console_Print(this, args)
 	fmt.Println()
-	return r
+	return MakeVariable(VAR_NUMBER, float64(0))
 }
 
 func console_ReadLine(this *Variable, args []Variable) Variable {
@@ -235,6 +271,278 @@ func number_ToString(this *Variable, args []Variable) Variable {
 	}
 
 	return MakeVariable(VAR_STRING, "")
+}
+
+func number_ToInt16Bytes(this *Variable, args []Variable) Variable {
+	var r []Variable
+
+	if len(args) > 0 && args[0].Type == VAR_NUMBER {
+		v := int16(args[0].Value.(float64))
+		bytes := *(*[2]byte)(unsafe.Pointer(&v))
+
+		for _, b := range bytes {
+			r = append(r, MakeVariable(VAR_NUMBER, float64(b)))
+		}
+	}
+
+	return MakeVariable(VAR_ARRAY, &r)
+}
+
+func number_ToUint16Bytes(this *Variable, args []Variable) Variable {
+	var r []Variable
+
+	if len(args) > 0 && args[0].Type == VAR_NUMBER {
+		v := uint16(args[0].Value.(float64))
+		bytes := *(*[2]byte)(unsafe.Pointer(&v))
+
+		for _, b := range bytes {
+			r = append(r, MakeVariable(VAR_NUMBER, float64(b)))
+		}
+	}
+
+	return MakeVariable(VAR_ARRAY, &r)
+}
+
+func number_ToInt32Bytes(this *Variable, args []Variable) Variable {
+	var r []Variable
+
+	if len(args) > 0 && args[0].Type == VAR_NUMBER {
+		v := int32(args[0].Value.(float64))
+		bytes := *(*[4]byte)(unsafe.Pointer(&v))
+
+		for _, b := range bytes {
+			r = append(r, MakeVariable(VAR_NUMBER, float64(b)))
+		}
+	}
+
+	return MakeVariable(VAR_ARRAY, &r)
+}
+
+func number_ToUint32Bytes(this *Variable, args []Variable) Variable {
+	var r []Variable
+
+	if len(args) > 0 && args[0].Type == VAR_NUMBER {
+		v := uint32(args[0].Value.(float64))
+		bytes := *(*[4]byte)(unsafe.Pointer(&v))
+
+		for _, b := range bytes {
+			r = append(r, MakeVariable(VAR_NUMBER, float64(b)))
+		}
+	}
+
+	return MakeVariable(VAR_ARRAY, &r)
+}
+
+func number_ToInt64Bytes(this *Variable, args []Variable) Variable {
+	var r []Variable
+
+	if len(args) > 0 && args[0].Type == VAR_NUMBER {
+		v := int64(args[0].Value.(float64))
+		bytes := *(*[8]byte)(unsafe.Pointer(&v))
+
+		for _, b := range bytes {
+			r = append(r, MakeVariable(VAR_NUMBER, float64(b)))
+		}
+	}
+
+	return MakeVariable(VAR_ARRAY, &r)
+}
+
+func number_ToUint64Bytes(this *Variable, args []Variable) Variable {
+	var r []Variable
+
+	if len(args) > 0 && args[0].Type == VAR_NUMBER {
+		v := uint64(args[0].Value.(float64))
+		bytes := *(*[8]byte)(unsafe.Pointer(&v))
+
+		for _, b := range bytes {
+			r = append(r, MakeVariable(VAR_NUMBER, float64(b)))
+		}
+	}
+
+	return MakeVariable(VAR_ARRAY, &r)
+}
+
+func number_ToFloat32Bytes(this *Variable, args []Variable) Variable {
+	var r []Variable
+
+	if len(args) > 0 && args[0].Type == VAR_NUMBER {
+		v := float32(args[0].Value.(float64))
+		bytes := *(*[4]byte)(unsafe.Pointer(&v))
+
+		for _, b := range bytes {
+			r = append(r, MakeVariable(VAR_NUMBER, float64(b)))
+		}
+	}
+
+	return MakeVariable(VAR_ARRAY, &r)
+}
+
+func number_ToFloat64Bytes(this *Variable, args []Variable) Variable {
+	var r []Variable
+
+	if len(args) > 0 && args[0].Type == VAR_NUMBER {
+		v := float64(args[0].Value.(float64))
+		bytes := *(*[8]byte)(unsafe.Pointer(&v))
+
+		for _, b := range bytes {
+			r = append(r, MakeVariable(VAR_NUMBER, float64(b)))
+		}
+	}
+
+	return MakeVariable(VAR_ARRAY, &r)
+}
+
+func number_FromInt16Bytes(this *Variable, args []Variable) Variable {
+	if len(args) > 0 && args[0].Type == VAR_ARRAY {
+		if a := *args[0].Value.(*[]Variable); len(a) > 1 {
+			var b [2]byte
+			for i := 0; i < 2; i++ {
+				if a[i].Type != VAR_NUMBER {
+					return MakeVariable(VAR_NUMBER, float64(0))
+				}
+
+				b[i] = byte(a[i].Value.(float64))
+			}
+
+			return MakeVariable(VAR_NUMBER, float64(*(*int16)(unsafe.Pointer(&b[0]))))
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func number_FromUint16Bytes(this *Variable, args []Variable) Variable {
+	if len(args) > 0 && args[0].Type == VAR_ARRAY {
+		if a := *args[0].Value.(*[]Variable); len(a) > 1 {
+			var b [2]byte
+			for i := 0; i < 2; i++ {
+				if a[i].Type != VAR_NUMBER {
+					return MakeVariable(VAR_NUMBER, float64(0))
+				}
+
+				b[i] = byte(a[i].Value.(float64))
+			}
+
+			return MakeVariable(VAR_NUMBER, float64(*(*uint16)(unsafe.Pointer(&b[0]))))
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func number_FromInt32Bytes(this *Variable, args []Variable) Variable {
+	if len(args) > 0 && args[0].Type == VAR_ARRAY {
+		if a := *args[0].Value.(*[]Variable); len(a) > 3 {
+			var b [4]byte
+			for i := 0; i < 4; i++ {
+				if a[i].Type != VAR_NUMBER {
+					return MakeVariable(VAR_NUMBER, float64(0))
+				}
+
+				b[i] = byte(a[i].Value.(float64))
+			}
+
+			return MakeVariable(VAR_NUMBER, float64(*(*int32)(unsafe.Pointer(&b[0]))))
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func number_FromUint32Bytes(this *Variable, args []Variable) Variable {
+	if len(args) > 0 && args[0].Type == VAR_ARRAY {
+		if a := *args[0].Value.(*[]Variable); len(a) > 3 {
+			var b [4]byte
+			for i := 0; i < 4; i++ {
+				if a[i].Type != VAR_NUMBER {
+					return MakeVariable(VAR_NUMBER, float64(0))
+				}
+
+				b[i] = byte(a[i].Value.(float64))
+			}
+
+			return MakeVariable(VAR_NUMBER, float64(*(*uint32)(unsafe.Pointer(&b[0]))))
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func number_FromInt64Bytes(this *Variable, args []Variable) Variable {
+	if len(args) > 0 && args[0].Type == VAR_ARRAY {
+		if a := *args[0].Value.(*[]Variable); len(a) > 7 {
+			var b [8]byte
+			for i := 0; i < 8; i++ {
+				if a[i].Type != VAR_NUMBER {
+					return MakeVariable(VAR_NUMBER, float64(0))
+				}
+
+				b[i] = byte(a[i].Value.(float64))
+			}
+
+			return MakeVariable(VAR_NUMBER, float64(*(*int64)(unsafe.Pointer(&b[0]))))
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func number_FromUint64Bytes(this *Variable, args []Variable) Variable {
+	if len(args) > 0 && args[0].Type == VAR_ARRAY {
+		if a := *args[0].Value.(*[]Variable); len(a) > 7 {
+			var b [8]byte
+			for i := 0; i < 8; i++ {
+				if a[i].Type != VAR_NUMBER {
+					return MakeVariable(VAR_NUMBER, float64(0))
+				}
+
+				b[i] = byte(a[i].Value.(float64))
+			}
+
+			return MakeVariable(VAR_NUMBER, float64(*(*uint64)(unsafe.Pointer(&b[0]))))
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func number_FromFloat32Bytes(this *Variable, args []Variable) Variable {
+	if len(args) > 0 && args[0].Type == VAR_ARRAY {
+		if a := *args[0].Value.(*[]Variable); len(a) > 3 {
+			var b [4]byte
+			for i := 0; i < 4; i++ {
+				if a[i].Type != VAR_NUMBER {
+					return MakeVariable(VAR_NUMBER, float64(0))
+				}
+
+				b[i] = byte(a[i].Value.(float64))
+			}
+
+			return MakeVariable(VAR_NUMBER, float64(*(*float32)(unsafe.Pointer(&b[0]))))
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func number_FromFloat64Bytes(this *Variable, args []Variable) Variable {
+	if len(args) > 0 && args[0].Type == VAR_ARRAY {
+		if a := *args[0].Value.(*[]Variable); len(a) > 7 {
+			var b [8]byte
+			for i := 0; i < 8; i++ {
+				if a[i].Type != VAR_NUMBER {
+					return MakeVariable(VAR_NUMBER, float64(0))
+				}
+
+				b[i] = byte(a[i].Value.(float64))
+			}
+
+			return MakeVariable(VAR_NUMBER, float64(*(*float64)(unsafe.Pointer(&b[0]))))
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
 }
 
 /***********************************************/
@@ -276,7 +584,7 @@ func string_CharCodeAt(this *Variable, args []Variable) Variable {
 	c := 0
 
 	if len(args) > 1 && args[0].Type == VAR_STRING && args[1].Type == VAR_NUMBER {
-		s := args[0].Value.(string)
+		s := []rune(args[0].Value.(string))
 		i := int(args[1].Value.(float64))
 		if i < len(s) {
 			c = int(s[i])
@@ -331,7 +639,7 @@ func string_Slice(this *Variable, args []Variable) Variable {
 			high = int(args[2].Value.(float64))
 		}
 
-		s := args[0].Value.(string)
+		s := []rune(args[0].Value.(string))
 		l := len(s)
 
 		if high < 1 {
@@ -339,7 +647,7 @@ func string_Slice(this *Variable, args []Variable) Variable {
 		}
 
 		if low < high && low > -1 && high <= l {
-			return MakeVariable(VAR_STRING, s[low:high])
+			return MakeVariable(VAR_STRING, string(s[low:high]))
 		}
 	}
 
@@ -385,6 +693,99 @@ func string_Trim(this *Variable, args []Variable) Variable {
 	}
 
 	return MakeVariable(VAR_STRING, "")
+}
+
+/***********************************************/
+/*                    regex                    */
+/***********************************************/
+func regex_Match(this *Variable, args []Variable) Variable {
+	if len(args) > 1 && args[0].Type == VAR_STRING && args[1].Type == VAR_STRING {
+		if reg, err := regexp.Compile(args[1].Value.(string)); err == nil && reg.MatchString(args[0].Value.(string)) {
+			return MakeVariable(VAR_NUMBER, float64(1))
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func regex_Find(this *Variable, args []Variable) Variable {
+	var r []Variable
+
+	if l := len(args); l > 1 && args[0].Type == VAR_STRING && args[1].Type == VAR_STRING {
+		n := -1
+		if l > 2 && args[2].Type == VAR_NUMBER {
+			n = int(args[2].Value.(float64))
+		}
+
+		if reg, err := regexp.Compile(args[1].Value.(string)); err == nil {
+			for _, s := range reg.FindAllString(args[0].Value.(string), n) {
+				r = append(r, MakeVariable(VAR_STRING, s))
+			}
+		}
+	}
+
+	return MakeVariable(VAR_ARRAY, &r)
+}
+
+func regex_FindIndex(this *Variable, args []Variable) Variable {
+	var r []Variable
+
+	if l := len(args); l > 1 && args[0].Type == VAR_STRING && args[1].Type == VAR_STRING {
+		n := -1
+		if l > 2 && args[2].Type == VAR_NUMBER {
+			n = int(args[2].Value.(float64))
+		}
+
+		if reg, err := regexp.Compile(args[1].Value.(string)); err == nil {
+			for _, i := range reg.FindAllStringIndex(args[0].Value.(string), n) {
+				r = append(r, MakeVariable(VAR_ARRAY, &[]Variable{MakeVariable(VAR_NUMBER, float64(i[0])), MakeVariable(VAR_NUMBER, float64(i[1]))}))
+			}
+		}
+	}
+
+	return MakeVariable(VAR_ARRAY, &r)
+}
+
+func regex_Replace(this *Variable, args []Variable) Variable {
+	if l := len(args); l > 2 && args[0].Type == VAR_STRING && args[1].Type == VAR_STRING && args[2].Type == VAR_STRING {
+		n := -1
+		if l > 3 && args[3].Type == VAR_NUMBER {
+			n = int(args[3].Value.(float64))
+		}
+
+		if reg, err := regexp.Compile(args[1].Value.(string)); err == nil {
+			if n == -1 {
+				return MakeVariable(VAR_STRING, reg.ReplaceAllString(args[0].Value.(string), args[2].Value.(string)))
+			} else {
+				return MakeVariable(VAR_STRING, strings.Join(reg.Split(args[0].Value.(string), n+1), args[2].Value.(string)))
+			}
+		}
+	}
+
+	return MakeVariable(VAR_STRING, "")
+}
+
+func regex_Split(this *Variable, args []Variable) Variable {
+	var r []Variable
+
+	if l := len(args); l > 1 && args[0].Type == VAR_STRING && args[1].Type == VAR_STRING {
+		n := -1
+		if l > 2 && args[2].Type == VAR_NUMBER {
+			n = int(args[2].Value.(float64))
+		}
+
+		if reg, err := regexp.Compile(args[1].Value.(string)); err == nil {
+			if n != -1 {
+				n++
+			}
+
+			for _, s := range reg.Split(args[0].Value.(string), n) {
+				r = append(r, MakeVariable(VAR_STRING, s))
+			}
+		}
+	}
+
+	return MakeVariable(VAR_ARRAY, &r)
 }
 
 /***********************************************/
@@ -727,8 +1128,24 @@ func json_Stringify(this *Variable, args []Variable) Variable {
 
 func ParseVariable(v interface{}) Variable {
 	switch v.(type) {
+	case uint:
+		return MakeVariable(VAR_NUMBER, float64(v.(uint)))
+	case uint8:
+		return MakeVariable(VAR_NUMBER, float64(v.(uint8)))
+	case uint16:
+		return MakeVariable(VAR_NUMBER, float64(v.(uint16)))
+	case uint32:
+		return MakeVariable(VAR_NUMBER, float64(v.(uint32)))
+	case uint64:
+		return MakeVariable(VAR_NUMBER, float64(v.(uint64)))
 	case int:
 		return MakeVariable(VAR_NUMBER, float64(v.(int)))
+	case int8:
+		return MakeVariable(VAR_NUMBER, float64(v.(int8)))
+	case int16:
+		return MakeVariable(VAR_NUMBER, float64(v.(int16)))
+	case int32:
+		return MakeVariable(VAR_NUMBER, float64(v.(int32)))
 	case int64:
 		return MakeVariable(VAR_NUMBER, float64(v.(int64)))
 	case float32:
@@ -878,7 +1295,7 @@ func thread_Create(this *Variable, args []Variable) Variable {
 /***********************************************/
 /*                     winapi                  */
 /***********************************************/
-var procCreateRemoteThread, procGetCurrentProcessId, procIsWow64Process, procReadProcessMemory, procWriteProcessMemory, procMapVirtualKey, procVkKeyScanA, procTimeGetTime, procNtSuspendProcess, procNtResumeProcess, procVirtualQueryEx, procOpenThread, procSuspendThread, procResumeThread, procThread32First, procThread32Next, procWow64GetThreadContext, procWow64GetThreadSelectorEntry, procGetThreadTimes, procNtQueryInformationThread *syscall.Proc
+var procVirtualProtectEx, procCreateRemoteThread, procGetCurrentProcessId, procIsWow64Process, procReadProcessMemory, procWriteProcessMemory, procMapVirtualKey, procVkKeyScanA, procTimeGetTime, procNtSuspendProcess, procNtResumeProcess, procVirtualQueryEx, procOpenThread, procSuspendThread, procResumeThread, procThread32First, procThread32Next, procWow64GetThreadContext, procWow64GetThreadSelectorEntry, procGetThreadTimes, procNtQueryInformationThread, procVirtualAllocEx *syscall.Proc
 
 type MEMORY_BASIC_INFORMATION struct {
 	BaseAddress       w32.PVOID
@@ -971,6 +1388,15 @@ func IsErrSuccess(err error) bool {
 	}
 
 	return false
+}
+
+func VirtualProtectEx(h w32.HANDLE, addr uintptr, size uint32, protect uint32) uint32 {
+	old := uint32(0)
+	if _, _, err := procVirtualProtectEx.Call(uintptr(h), addr, uintptr(size), uintptr(protect), uintptr(unsafe.Pointer(&old))); !IsErrSuccess(err) {
+		return 0
+	}
+
+	return old
 }
 
 func GetCurrentProcessId() uint {
@@ -1163,6 +1589,11 @@ func CreateRemoteThread(h w32.HANDLE, addr uintptr, arg uintptr) w32.HANDLE {
 	return w32.HANDLE(r)
 }
 
+func VirtualAllocEx(h w32.HANDLE, addr uintptr, size uint32, alloc_type uint32, protect uint32) uintptr {
+	r, _, _ := procVirtualAllocEx.Call(uintptr(h), addr, uintptr(size), uintptr(alloc_type), uintptr(protect))
+	return r
+}
+
 /***********************************************/
 /*                      date                   */
 /***********************************************/
@@ -1220,13 +1651,8 @@ func process_Open(this *Variable, args []Variable) Variable {
 					for c == nil {
 						if comp(entry) {
 							id = int(entry.ProcessID)
-							AddProp(&p, "Size", MakeVariable(VAR_NUMBER, float64(entry.Size)))
-							AddProp(&p, "Usage", MakeVariable(VAR_NUMBER, float64(entry.Usage)))
-							AddProp(&p, "ModuleId", MakeVariable(VAR_NUMBER, float64(entry.ModuleID)))
-							AddProp(&p, "Threads", MakeVariable(VAR_NUMBER, float64(entry.Threads)))
 							AddProp(&p, "ParentId", MakeVariable(VAR_NUMBER, float64(entry.ParentProcessID)))
 							AddProp(&p, "PriClassBase", MakeVariable(VAR_NUMBER, float64(entry.PriClassBase)))
-							AddProp(&p, "Flags", MakeVariable(VAR_NUMBER, float64(entry.Flags)))
 							AddProp(&p, "Name", MakeVariable(VAR_STRING, windows.UTF16ToString(entry.ExeFile[:])))
 							break
 						}
@@ -1253,27 +1679,43 @@ func process_Open(this *Variable, args []Variable) Variable {
 	AddProp(&p, "Resume", MakeVariable(VAR_NFUNCTION, process_Resume))
 	if wow64 {
 		AddProp(&p, "Wow64", MakeVariable(VAR_NUMBER, float64(1)))
+		AddProp(&p, "GetProcAddress", MakeVariable(VAR_NFUNCTION, process_GetProcAddress32))
+		AddProp(&p, "Call", MakeVariable(VAR_NFUNCTION, process_Call32))
 		AddProp(&p, "ReadPointer", MakeVariable(VAR_NFUNCTION, process_ReadPointer32))
 		AddProp(&p, "LoadLibrary", MakeVariable(VAR_NFUNCTION, process_LoadLibrary32))
-
 	} else {
 		AddProp(&p, "Wow64", MakeVariable(VAR_NUMBER, float64(0)))
+		AddProp(&p, "GetProcAddress", MakeVariable(VAR_NFUNCTION, process_GetProcAddress64))
+		AddProp(&p, "Call", MakeVariable(VAR_NFUNCTION, process_Call64))
 		AddProp(&p, "ReadPointer", MakeVariable(VAR_NFUNCTION, process_ReadPointer64))
 		AddProp(&p, "LoadLibrary", MakeVariable(VAR_NFUNCTION, process_LoadLibrary64))
 	}
 	AddProp(&p, "FindPattern", MakeVariable(VAR_NFUNCTION, process_FindPattern))
+	AddProp(&p, "Protect", MakeVariable(VAR_NFUNCTION, process_Protect))
+	AddProp(&p, "Alloc", MakeVariable(VAR_NFUNCTION, process_Alloc))
+	AddProp(&p, "Free", MakeVariable(VAR_NFUNCTION, process_Free))
 	AddProp(&p, "Read", MakeVariable(VAR_NFUNCTION, process_Read))
 	AddProp(&p, "Write", MakeVariable(VAR_NFUNCTION, process_Write))
-	AddProp(&p, "ReadInt", MakeVariable(VAR_NFUNCTION, process_ReadInt))
-	AddProp(&p, "WriteInt", MakeVariable(VAR_NFUNCTION, process_WriteInt))
-	AddProp(&p, "ReadInt32", MakeVariable(VAR_NFUNCTION, process_ReadInt))
-	AddProp(&p, "WriteInt32", MakeVariable(VAR_NFUNCTION, process_WriteInt))
+	AddProp(&p, "ReadString", MakeVariable(VAR_NFUNCTION, process_ReadString))
+	AddProp(&p, "ReadString8", MakeVariable(VAR_NFUNCTION, process_ReadString))
+	AddProp(&p, "WriteString", MakeVariable(VAR_NFUNCTION, process_WriteString))
+	AddProp(&p, "WriteString8", MakeVariable(VAR_NFUNCTION, process_WriteString))
+	AddProp(&p, "ReadString16", MakeVariable(VAR_NFUNCTION, process_ReadString16))
+	AddProp(&p, "WriteString16", MakeVariable(VAR_NFUNCTION, process_WriteString16))
+	AddProp(&p, "ReadInt16", MakeVariable(VAR_NFUNCTION, process_ReadInt16))
+	AddProp(&p, "WriteInt16", MakeVariable(VAR_NFUNCTION, process_WriteInt16))
+	AddProp(&p, "ReadInt", MakeVariable(VAR_NFUNCTION, process_ReadInt32))
+	AddProp(&p, "WriteInt", MakeVariable(VAR_NFUNCTION, process_WriteInt32))
+	AddProp(&p, "ReadInt32", MakeVariable(VAR_NFUNCTION, process_ReadInt32))
+	AddProp(&p, "WriteInt32", MakeVariable(VAR_NFUNCTION, process_WriteInt32))
 	AddProp(&p, "ReadInt64", MakeVariable(VAR_NFUNCTION, process_ReadInt64))
 	AddProp(&p, "WriteInt64", MakeVariable(VAR_NFUNCTION, process_WriteInt64))
-	AddProp(&p, "ReadUint", MakeVariable(VAR_NFUNCTION, process_ReadUint))
-	AddProp(&p, "WriteUint", MakeVariable(VAR_NFUNCTION, process_WriteUint))
-	AddProp(&p, "ReadUint32", MakeVariable(VAR_NFUNCTION, process_ReadUint))
-	AddProp(&p, "WriteUint32", MakeVariable(VAR_NFUNCTION, process_WriteUint))
+	AddProp(&p, "ReadUint16", MakeVariable(VAR_NFUNCTION, process_ReadUint16))
+	AddProp(&p, "WriteUint16", MakeVariable(VAR_NFUNCTION, process_WriteUint16))
+	AddProp(&p, "ReadUint", MakeVariable(VAR_NFUNCTION, process_ReadUint32))
+	AddProp(&p, "WriteUint", MakeVariable(VAR_NFUNCTION, process_WriteUint32))
+	AddProp(&p, "ReadUint32", MakeVariable(VAR_NFUNCTION, process_ReadUint32))
+	AddProp(&p, "WriteUint32", MakeVariable(VAR_NFUNCTION, process_WriteUint32))
 	AddProp(&p, "ReadUint64", MakeVariable(VAR_NFUNCTION, process_ReadUint64))
 	AddProp(&p, "WriteUint64", MakeVariable(VAR_NFUNCTION, process_WriteUint64))
 	AddProp(&p, "ReadFloat", MakeVariable(VAR_NFUNCTION, process_ReadFloat))
@@ -1287,7 +1729,7 @@ func process_Open(this *Variable, args []Variable) Variable {
 	AddProp(&p, "Modules", MakeVariable(VAR_NFUNCTION, process_Modules))
 	AddProp(&p, "Threads", MakeVariable(VAR_NFUNCTION, process_Threads))
 	AddProp(&p, "Close", MakeVariable(VAR_NFUNCTION, process_Close))
-	AddProp(&p, "Kill", MakeVariable(VAR_NFUNCTION, process_Kill))
+	AddProp(&p, "Exit", MakeVariable(VAR_NFUNCTION, process_Exit))
 	return p
 }
 
@@ -1303,14 +1745,10 @@ func process_List(this *Variable, args []Variable) Variable {
 			var c error
 			for c == nil {
 				p := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
-				AddProp(&p, "Size", MakeVariable(VAR_NUMBER, float64(entry.Size)))
-				AddProp(&p, "Usage", MakeVariable(VAR_NUMBER, float64(entry.Usage)))
 				AddProp(&p, "Id", MakeVariable(VAR_NUMBER, float64(entry.ProcessID)))
-				AddProp(&p, "ModuleId", MakeVariable(VAR_NUMBER, float64(entry.ModuleID)))
 				AddProp(&p, "Threads", MakeVariable(VAR_NUMBER, float64(entry.Threads)))
 				AddProp(&p, "ParentId", MakeVariable(VAR_NUMBER, float64(entry.ParentProcessID)))
 				AddProp(&p, "PriClassBase", MakeVariable(VAR_NUMBER, float64(entry.PriClassBase)))
-				AddProp(&p, "Flags", MakeVariable(VAR_NUMBER, float64(entry.Flags)))
 				AddProp(&p, "Name", MakeVariable(VAR_STRING, windows.UTF16ToString(entry.ExeFile[:])))
 				r = append(r, p)
 				c = windows.Process32Next(snapshot, &entry)
@@ -1335,6 +1773,628 @@ func GetProcessHandle(this *Variable) (handle w32.HANDLE) {
 	return
 }
 
+func GetId(this *Variable) (id uint32) {
+	if this != nil {
+		if p := *this; p.Type == VAR_OBJECT {
+			if v, ok := (*p.Value.(*map[string]*Variable))["Id"]; ok && v.Type == VAR_NUMBER {
+				id = uint32(v.Value.(float64))
+			}
+		}
+	}
+
+	return
+}
+
+func PushArgs32(buffer *[]byte, args []interface{}) (pops int) {
+	var b []byte
+
+	for i := len(args) - 1; i > -1; i-- {
+		pops++
+
+		switch args[i].(type) {
+		case uint8:
+			b = append(b, 0x6A)
+			b = append(b, args[i].(uint8))
+		case uint16:
+			b = append(b, 0x68)
+			v := uint32(args[i].(uint16))
+			for _, e := range *(*[4]byte)(unsafe.Pointer(&v)) {
+				b = append(b, e)
+			}
+		case uint32:
+			b = append(b, 0x68)
+			v := args[i].(uint32)
+			for _, e := range *(*[4]byte)(unsafe.Pointer(&v)) {
+				b = append(b, e)
+			}
+		case uint64:
+			b = append(b, 0x68)
+
+			v := args[i].(uint64)
+			bytes := *(*[8]byte)(unsafe.Pointer(&v))
+			for i := 4; i < 8; i++ {
+				b = append(b, bytes[i])
+			}
+
+			b = append(b, 0x68)
+
+			for i := 0; i < 4; i++ {
+				b = append(b, bytes[i])
+			}
+
+			pops++
+		case float32:
+			b = append(b, 0x68)
+			v := args[i].(float32)
+			for _, e := range *(*[4]byte)(unsafe.Pointer(&v)) {
+				b = append(b, e)
+			}
+		case float64:
+			b = append(b, 0x68)
+
+			v := args[i].(float64)
+			bytes := *(*[8]byte)(unsafe.Pointer(&v))
+			for i := 4; i < 8; i++ {
+				b = append(b, bytes[i])
+			}
+
+			b = append(b, 0x68)
+
+			for i := 0; i < 4; i++ {
+				b = append(b, bytes[i])
+			}
+
+			pops++
+		}
+	}
+
+	*buffer = append(*buffer, b...)
+	return
+}
+
+func AbsCall32(buffer *[]byte, addr uint32) {
+	b := []byte{0xB8} // mov eax,x
+	for _, e := range *(*[4]byte)(unsafe.Pointer(&addr)) {
+		b = append(b, e)
+	}
+	*buffer = append(*buffer, append(b, []byte{0xFF, 0xD0}...)...) // call eax
+}
+
+func Call32(h w32.HANDLE, addr uint32, flags uint32, args ...interface{}) (raw_ret []byte) {
+	var buffer []byte
+
+	if flags&0x20 != 0 { // stdcall
+		PushArgs32(&buffer, args)
+		AbsCall32(&buffer, addr)
+	} else if flags&0x40 != 0 { // fastcall - ecx(index 0 dword or less), edx(index 1 dword or less), rest stack
+		regs := []byte{0xB9, 0xBA}
+		state := 0
+		i := 0
+
+		AddFastReg := func(v uint32) {
+			buffer = append(buffer, regs[state])
+			for _, b := range *(*[4]byte)(unsafe.Pointer(&v)) {
+				buffer = append(buffer, b)
+			}
+			args = append(args[:i], args[i+1:]...)
+			i--
+			state++
+		}
+
+		for ; i < len(args) && state < 2; i++ {
+			switch args[i].(type) {
+			case uint8:
+				AddFastReg(uint32(args[i].(uint8)))
+			case uint16:
+				AddFastReg(uint32(args[i].(uint16)))
+			case uint32:
+				AddFastReg(args[i].(uint32))
+			}
+		}
+
+		PushArgs32(&buffer, args)
+		AbsCall32(&buffer, addr)
+	} else if flags&0x80 != 0 { // thiscall - ecx(this)
+		if len(args) > 0 {
+			if v, ok := args[0].(uint32); ok {
+				buffer = append(buffer, 0xB9)
+				for _, b := range *(*[4]byte)(unsafe.Pointer(&v)) {
+					buffer = append(buffer, b)
+				}
+				args = args[1:]
+			} else {
+				return
+			}
+		}
+
+		PushArgs32(&buffer, args)
+		AbsCall32(&buffer, addr)
+	} else { // cdecl - caller cleanup
+		pops := PushArgs32(&buffer, args)
+		AbsCall32(&buffer, addr)
+		for i := 0; i < pops; i++ {
+			buffer = append(buffer, 0x59)
+		}
+	}
+
+	if ret := uint32(VirtualAllocEx(h, 0, 8, w32.MEM_COMMIT|w32.MEM_RESERVE, w32.PAGE_EXECUTE_READWRITE)); ret != 0 {
+		if flags&0x01 != 0 { // int64
+			buffer = append(buffer, 0xA3)
+			for _, b := range *(*[4]byte)(unsafe.Pointer(&ret)) {
+				buffer = append(buffer, b)
+			}
+
+			v := ret + 4
+			buffer = append(buffer, []byte{0x89, 0x15}...)
+			for _, b := range *(*[4]byte)(unsafe.Pointer(&v)) {
+				buffer = append(buffer, b)
+			}
+		} else if flags&0x02 != 0 { // float32
+			buffer = append(buffer, []byte{0xD9, 0x1D}...)
+			for _, b := range *(*[4]byte)(unsafe.Pointer(&ret)) {
+				buffer = append(buffer, b)
+			}
+		} else if flags&0x04 != 0 { // float64
+			buffer = append(buffer, []byte{0xDD, 0x1D}...)
+			for _, b := range *(*[4]byte)(unsafe.Pointer(&ret)) {
+				buffer = append(buffer, b)
+			}
+		} else { // int32
+			buffer = append(buffer, 0xA3)
+			for _, b := range *(*[4]byte)(unsafe.Pointer(&ret)) {
+				buffer = append(buffer, b)
+			}
+		}
+
+		buffer = append(buffer, 0xC3)
+
+		if proc := VirtualAllocEx(h, 0, uint32(len(buffer)), w32.MEM_COMMIT|w32.MEM_RESERVE, w32.PAGE_EXECUTE_READWRITE); proc != 0 && WriteProcessMemory(h, proc, uintptr(unsafe.Pointer(&buffer[0])), uint(len(buffer))) == nil {
+			if thread := CreateRemoteThread(h, proc, 0); thread != 0 {
+				if flags&0x10 == 0 {
+					windows.WaitForSingleObject(windows.Handle(thread), w32.INFINITE)
+
+					if flags&0x01 != 0 || flags&0x04 != 0 {
+						if bytes, err := ReadProcessMemory(h, uintptr(ret), 8); err == nil {
+							for _, b := range bytes {
+								raw_ret = append(raw_ret, b)
+							}
+						}
+					} else {
+						if bytes, err := ReadProcessMemory(h, uintptr(ret), 4); err == nil {
+							for _, b := range bytes {
+								raw_ret = append(raw_ret, b)
+							}
+						}
+					}
+				}
+
+				w32.CloseHandle(thread)
+			}
+
+			w32.VirtualFreeEx(h, proc, 0, w32.MEM_RELEASE)
+		}
+
+		w32.VirtualFreeEx(h, uintptr(ret), 0, w32.MEM_RELEASE)
+	}
+
+	return
+}
+
+func Call64(h w32.HANDLE, addr uint64, flags uint32, args ...interface{}) (raw_ret [8]byte) {
+	BYTE_REG_STUBS := [][]byte{{0xB1}, {0xB2}, {0x41, 0xB0}, {0x41, 0xB1}}                                                                                       // mov reg,x
+	BYTE_STACK_STUB := []byte{0xC6, 0x44, 0x24}                                                                                                                  // mov byte ptr [rsp+x],y
+	WORD_REG_STUBS := [][]byte{{0x66, 0xB9}, {0x66, 0xBA}, {0x66, 0x41, 0xB8}, {0x66, 0x41, 0xB9}}                                                               // mov reg,x
+	WORD_STACK_STUB := []byte{0x66, 0xC7, 0x44, 0x24}                                                                                                            // mov word ptr [rsp+x],y
+	DWORD_REG_STUBS := [][]byte{{0xB9}, {0xBA}, {0x41, 0xB8}, {0x41, 0xB9}}                                                                                      // mov reg,x
+	DWORD_STACK_STUB := []byte{0xC7, 0x44, 0x24}                                                                                                                 // mov dword ptr [rsp+x],y
+	QWORD_REG_STUBS := [][]byte{{0x48, 0xB9}, {0x48, 0xBA}, {0x49, 0xB8}, {0x49, 0xB9}}                                                                          // mov reg,x
+	QWORD_STACK_STUB := []byte{0x48, 0x89, 0x44, 0x24}                                                                                                           // mov qword ptr [rsp+x],rax
+	FLOAT_REG_STUBS := [][]byte{{0x66, 0x0F, 0x6E, 0xC0}, {0x66, 0x0F, 0x6E, 0xC8}, {0x66, 0x0F, 0x6E, 0xD0}, {0x66, 0x0F, 0x6E, 0xD8}}                          // mov reg,eax
+	DOUBLE_REG_STUBS := [][]byte{{0x66, 0x48, 0x0F, 0x6E, 0xC0}, {0x66, 0x48, 0x0F, 0x6E, 0xC8}, {0x66, 0x48, 0x0F, 0x6E, 0xD0}, {0x66, 0x48, 0x0F, 0x6E, 0xD8}} // mov reg,rax
+
+	shadow := byte(0x28)
+	le := len(args)
+	if le > 4 {
+		shadow += byte(math.Ceil((float64(le)-4)/2) * 16)
+	}
+
+	buffer := []byte{0x48, 0x83, 0xEC, shadow}
+
+	for i := le - 1; i > 3; i-- {
+		switch args[i].(type) {
+		case uint8:
+			buffer = append(buffer, BYTE_STACK_STUB...)
+			buffer = append(buffer, []byte{byte(i * 8), args[i].(uint8)}...)
+		case uint16:
+			{
+				buffer = append(buffer, WORD_STACK_STUB...)
+				buffer = append(buffer, byte(i*8))
+				v := args[i].(uint16)
+				for _, b := range *(*[2]byte)(unsafe.Pointer(&v)) {
+					buffer = append(buffer, b)
+				}
+			}
+		case uint32:
+			{
+				buffer = append(buffer, DWORD_STACK_STUB...)
+				buffer = append(buffer, byte(i*8))
+				v := args[i].(uint32)
+				for _, b := range *(*[4]byte)(unsafe.Pointer(&v)) {
+					buffer = append(buffer, b)
+				}
+			}
+		case uint64:
+			{
+				buffer = append(buffer, 0x48, 0xB8) // mov rax,QWORD
+				v := args[i].(uint64)
+				for _, b := range *(*[8]byte)(unsafe.Pointer(&v)) {
+					buffer = append(buffer, b)
+				}
+				buffer = append(buffer, QWORD_STACK_STUB...)
+				buffer = append(buffer, byte(i*8))
+			}
+		case float32:
+			{
+				buffer = append(buffer, DWORD_STACK_STUB...)
+				buffer = append(buffer, byte(i*8))
+				v := args[i].(float32)
+				for _, b := range *(*[4]byte)(unsafe.Pointer(&v)) {
+					buffer = append(buffer, b)
+				}
+			}
+		case float64:
+			{
+				buffer = append(buffer, 0x48, 0xB8) // mov rax,QWORD
+				v := args[i].(float64)
+				for _, b := range *(*[8]byte)(unsafe.Pointer(&v)) {
+					buffer = append(buffer, b)
+				}
+				buffer = append(buffer, QWORD_STACK_STUB...)
+				buffer = append(buffer, byte(i*8))
+			}
+		}
+	}
+
+	for i := 0; i < le && i < 4; i++ {
+		switch args[i].(type) {
+		case uint8:
+			buffer = append(buffer, BYTE_REG_STUBS[i]...)
+			buffer = append(buffer, args[i].(uint8))
+		case uint16:
+			{
+				buffer = append(buffer, WORD_REG_STUBS[i]...)
+				v := args[i].(uint16)
+				for _, b := range *(*[2]byte)(unsafe.Pointer(&v)) {
+					buffer = append(buffer, b)
+				}
+			}
+		case uint32:
+			{
+				buffer = append(buffer, DWORD_REG_STUBS[i]...)
+				v := args[i].(uint32)
+				for _, b := range *(*[4]byte)(unsafe.Pointer(&v)) {
+					buffer = append(buffer, b)
+				}
+			}
+		case uint64:
+			{
+				buffer = append(buffer, QWORD_REG_STUBS[i]...)
+				v := args[i].(uint64)
+				for _, b := range *(*[8]byte)(unsafe.Pointer(&v)) {
+					buffer = append(buffer, b)
+				}
+			}
+		case float32:
+			{
+				buffer = append(buffer, 0xB8) // mov eax,DWORD
+				v := args[i].(float32)
+				for _, b := range *(*[4]byte)(unsafe.Pointer(&v)) {
+					buffer = append(buffer, b)
+				}
+				buffer = append(buffer, FLOAT_REG_STUBS[i]...)
+			}
+		case float64:
+			{
+				buffer = append(buffer, 0x48, 0xB8) // mov rax,QWORD
+				v := args[i].(float64)
+				for _, b := range *(*[8]byte)(unsafe.Pointer(&v)) {
+					buffer = append(buffer, b)
+				}
+				buffer = append(buffer, DOUBLE_REG_STUBS[i]...)
+			}
+		}
+	}
+
+	buffer = append(buffer, []byte{0xFF, 0x15, 0x02, 0x00, 0x00, 0x00, 0xEB, 0x08}...)
+	for _, b := range *(*[8]byte)(unsafe.Pointer(&addr)) {
+		buffer = append(buffer, b)
+	}
+	buffer = append(buffer, []byte{0x48, 0x83, 0xC4, shadow}...)
+
+	if ret := VirtualAllocEx(h, 0, 8, w32.MEM_COMMIT|w32.MEM_RESERVE, w32.PAGE_EXECUTE_READWRITE); ret != 0 {
+		if flags&0x02 != 0 || flags&0x04 != 0 {
+			buffer = append(buffer, []byte{0x66, 0x48, 0x0F, 0x7E, 0xC0}...)
+		}
+
+		buffer = append(buffer, []byte{0x48, 0xA3}...)
+		for _, b := range *(*[8]byte)(unsafe.Pointer(&ret)) {
+			buffer = append(buffer, b)
+		}
+		buffer = append(buffer, 0xC3)
+
+		if proc := VirtualAllocEx(h, 0, uint32(len(buffer)), w32.MEM_COMMIT|w32.MEM_RESERVE, w32.PAGE_EXECUTE_READWRITE); proc != 0 && WriteProcessMemory(h, proc, uintptr(unsafe.Pointer(&buffer[0])), uint(len(buffer))) == nil {
+			if thread := CreateRemoteThread(h, proc, 0); thread != 0 {
+				if flags&0x10 == 0 {
+					windows.WaitForSingleObject(windows.Handle(thread), w32.INFINITE)
+
+					if bytes, err := ReadProcessMemory(h, ret, 8); err == nil {
+						for i, b := range bytes {
+							raw_ret[i] = b
+						}
+					}
+				}
+
+				w32.CloseHandle(thread)
+			}
+
+			w32.VirtualFreeEx(h, proc, 0, w32.MEM_RELEASE)
+		}
+
+		w32.VirtualFreeEx(h, ret, 0, w32.MEM_RELEASE)
+	}
+
+	return
+}
+
+func GetProcAddressEx32(h w32.HANDLE, id uint32, module string, proc string) (r uint32) {
+	if module := GetModuleInfoByName(id, module); module.ModBaseSize != 0 {
+		stub := []byte{0x68, 0x00, 0x00, 0x00, 0x00, 0x68, 0x00, 0x00, 0x00, 0x00, 0xE8, 0x00, 0x00, 0x00, 0x00, 0xA3, 0x00, 0x00, 0x00, 0x00, 0xC3}
+		mod_base := uint32(uintptr(unsafe.Pointer(module.ModBaseAddr)))
+
+		if p := FindPattern(h, []byte{0x8B, 0xFF, 0x55, 0x8B, 0xEC, 0xFF, 0x75, 0x04, 0xFF, 0x75, 0x0C, 0xFF, 0x75, 0x08}, []byte("xxxxxxxxxxxxxx"), uint64(mod_base), uint64(module.ModBaseSize)); p != 0 {
+			if base := VirtualAllocEx(h, 0, uint32(len(stub)), w32.MEM_COMMIT|w32.MEM_RESERVE, w32.PAGE_EXECUTE_READWRITE); base != 0 {
+				*(*uint32)(unsafe.Pointer(&stub[11])) = uint32(p) - uint32(uintptr(unsafe.Pointer(base))) - 15
+
+				arg := append([]byte(proc), 0)
+				if proc := VirtualAllocEx(h, 0, uint32(len(arg)), w32.MEM_COMMIT|w32.MEM_RESERVE, w32.PAGE_EXECUTE_READWRITE); proc != 0 && WriteProcessMemory(h, proc, uintptr(unsafe.Pointer(&arg[0])), uint(len(arg))) == nil {
+					*(*uint32)(unsafe.Pointer(&stub[1])) = uint32(uintptr(unsafe.Pointer(proc)))
+					*(*uint32)(unsafe.Pointer(&stub[6])) = mod_base
+
+					if ret := VirtualAllocEx(h, 0, 4, w32.MEM_COMMIT|w32.MEM_RESERVE, w32.PAGE_EXECUTE_READWRITE); ret != 0 {
+						*(*uint32)(unsafe.Pointer(&stub[16])) = uint32(uintptr(unsafe.Pointer(ret)))
+						if WriteProcessMemory(h, base, uintptr(unsafe.Pointer(&stub[0])), uint(len(stub))) == nil {
+							if thread := CreateRemoteThread(h, base, 0); thread != 0 {
+								windows.WaitForSingleObject(windows.Handle(thread), w32.INFINITE)
+								w32.CloseHandle(thread)
+
+								if data, err := ReadProcessMemory(h, ret, 4); err == nil {
+									r = *(*uint32)(unsafe.Pointer(&data[0]))
+								}
+							}
+						}
+
+						w32.VirtualFreeEx(h, ret, 0, w32.MEM_RELEASE)
+					}
+
+					w32.VirtualFreeEx(h, proc, 0, w32.MEM_RELEASE)
+				}
+
+				w32.VirtualFreeEx(h, base, 0, w32.MEM_RELEASE)
+			}
+		}
+	}
+
+	return
+}
+
+func GetProcAddressEx64(h w32.HANDLE, id uint32, module string, proc string) (r uint64) {
+	dll := syscall.MustLoadDLL("kernel32.dll")
+	addr, _ := windows.GetProcAddress(windows.Handle(dll.Handle), "GetProcAddress")
+	dll.Release()
+
+	if module := uint64(uintptr(unsafe.Pointer(GetModuleInfoByName(id, module).ModBaseAddr))); module != 0 {
+		stub := []byte{0x48, 0x83, 0xEC, 0x28, 0x48, 0xB9, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x48, 0xBA, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x15, 0x02, 0x00, 0x00, 0x00, 0xEB, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x48, 0xA3, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x48, 0x83, 0xC4, 0x28, 0xC3}
+
+		*(*uint64)(unsafe.Pointer(&stub[6])) = module
+		*(*uint64)(unsafe.Pointer(&stub[32])) = uint64(addr)
+
+		arg := append([]byte(proc), 0)
+		if proc := VirtualAllocEx(h, 0, uint32(len(arg)), w32.MEM_COMMIT|w32.MEM_RESERVE, w32.PAGE_EXECUTE_READWRITE); proc != 0 && WriteProcessMemory(h, proc, uintptr(unsafe.Pointer(&arg[0])), uint(len(arg))) == nil {
+			*(*uint64)(unsafe.Pointer(&stub[16])) = uint64(uintptr(unsafe.Pointer(proc)))
+
+			if ret := VirtualAllocEx(h, 0, 8, w32.MEM_COMMIT|w32.MEM_RESERVE, w32.PAGE_EXECUTE_READWRITE); ret != 0 {
+				*(*uint64)(unsafe.Pointer(&stub[42])) = uint64(uintptr(unsafe.Pointer(ret)))
+
+				if base := VirtualAllocEx(h, 0, uint32(len(stub)), w32.MEM_COMMIT|w32.MEM_RESERVE, w32.PAGE_EXECUTE_READWRITE); base != 0 && WriteProcessMemory(h, base, uintptr(unsafe.Pointer(&stub[0])), uint(len(stub))) == nil {
+					if thread := CreateRemoteThread(h, base, 0); thread != 0 {
+						windows.WaitForSingleObject(windows.Handle(thread), w32.INFINITE)
+						w32.CloseHandle(thread)
+
+						if data, err := ReadProcessMemory(h, ret, 8); err == nil {
+							r = *(*uint64)(unsafe.Pointer(&data[0]))
+						}
+					}
+
+					w32.VirtualFreeEx(h, base, 0, w32.MEM_RELEASE)
+				}
+
+				w32.VirtualFreeEx(h, ret, 0, w32.MEM_RELEASE)
+			}
+
+			w32.VirtualFreeEx(h, proc, 0, w32.MEM_RELEASE)
+		}
+	}
+
+	return
+}
+
+func process_GetProcAddress32(this *Variable, args []Variable) Variable {
+	r := MakeVariable(VAR_NUMBER, float64(0))
+
+	if h := GetProcessHandle(this); h != 0 && len(args) > 1 && args[0].Type == VAR_STRING && args[1].Type == VAR_STRING {
+		if id := GetId(this); id != 0 {
+			r.Value = float64(GetProcAddressEx32(h, id, args[0].Value.(string), args[1].Value.(string)))
+		}
+	}
+
+	return r
+}
+
+func process_GetProcAddress64(this *Variable, args []Variable) Variable {
+	r := MakeVariable(VAR_NUMBER, float64(0))
+
+	if h := GetProcessHandle(this); h != 0 && len(args) > 1 && args[0].Type == VAR_STRING && args[1].Type == VAR_STRING {
+		if id := GetId(this); id != 0 {
+			r.Value = float64(GetProcAddressEx64(h, id, args[0].Value.(string), args[1].Value.(string)))
+		}
+	}
+
+	return r
+}
+
+func ConvertCallArgs(args []Variable, out *[]interface{}) bool {
+	var cargs []interface{}
+
+	for _, arg := range args {
+		if arg.Type == VAR_OBJECT {
+			obj := *arg.Value.(*map[string]*Variable)
+			val := GetProp(obj, "Value")
+			if t := GetProp(obj, "Type"); t.Type == VAR_NUMBER {
+				tv := int(t.Value.(float64))
+				if (tv&0x80) != 0 && val.Type == VAR_ARRAY { // raw
+					tv = tv & ^0x80
+
+					var bytes []byte
+					for _, b := range *val.Value.(*[]Variable) {
+						if b.Type != VAR_NUMBER {
+							return false
+						}
+
+						bytes = append(bytes, byte(b.Value.(float64)))
+					}
+
+					if tv%9 == len(bytes) {
+						switch tv {
+						case 1:
+							cargs = append(cargs, *(*uint8)(unsafe.Pointer(&bytes[0])))
+							continue
+						case 2:
+							cargs = append(cargs, *(*uint16)(unsafe.Pointer(&bytes[0])))
+							continue
+						case 4:
+							cargs = append(cargs, *(*uint32)(unsafe.Pointer(&bytes[0])))
+							continue
+						case 8:
+							cargs = append(cargs, *(*uint64)(unsafe.Pointer(&bytes[0])))
+							continue
+						case 13:
+							cargs = append(cargs, *(*float32)(unsafe.Pointer(&bytes[0])))
+							continue
+						case 17:
+							cargs = append(cargs, *(*float64)(unsafe.Pointer(&bytes[0])))
+							continue
+						}
+					}
+				} else if val.Type == VAR_NUMBER { // normal
+					switch tv {
+					case 1:
+						cargs = append(cargs, uint8(val.Value.(float64)))
+						continue
+					case 2:
+						cargs = append(cargs, uint16(val.Value.(float64)))
+						continue
+					case 4:
+						cargs = append(cargs, uint32(val.Value.(float64)))
+						continue
+					case 8:
+						cargs = append(cargs, uint64(val.Value.(float64)))
+						continue
+					case 13:
+						cargs = append(cargs, float32(val.Value.(float64)))
+						continue
+					case 17:
+						cargs = append(cargs, val.Value.(float64))
+						continue
+					}
+				}
+			}
+		}
+
+		return false
+	}
+
+	*out = cargs
+	return true
+}
+
+func process_Call32(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 {
+		if l := len(args); l > 0 && args[0].Type == VAR_NUMBER {
+			flags := uint32(0)
+			var cargs []interface{}
+			if l > 1 && args[1].Type == VAR_NUMBER {
+				flags = uint32(args[1].Value.(float64))
+			}
+
+			if l < 2 || ConvertCallArgs(args[2:], &cargs) {
+				ret := Call32(h, uint32(args[0].Value.(float64)), flags, cargs...)
+				if flags&0x08 != 0 {
+					var r []Variable
+					for _, b := range ret {
+						r = append(r, MakeVariable(VAR_NUMBER, float64(b)))
+					}
+					return MakeVariable(VAR_ARRAY, &r)
+				}
+
+				if len(ret) > 0 {
+					if flags&0x01 != 0 {
+						return MakeVariable(VAR_NUMBER, float64(*(*int64)(unsafe.Pointer(&ret[0]))))
+					} else if flags&0x02 != 0 {
+						return MakeVariable(VAR_NUMBER, float64(*(*float32)(unsafe.Pointer(&ret[0]))))
+					} else if flags&0x04 != 0 {
+						return MakeVariable(VAR_NUMBER, *(*float64)(unsafe.Pointer(&ret[0])))
+					}
+
+					return MakeVariable(VAR_NUMBER, float64(*(*int32)(unsafe.Pointer(&ret[0]))))
+				}
+			}
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func process_Call64(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 {
+		if l := len(args); l > 0 && args[0].Type == VAR_NUMBER {
+			flags := uint32(0)
+			var cargs []interface{}
+			if l > 1 && args[1].Type == VAR_NUMBER {
+				flags = uint32(args[1].Value.(float64))
+			}
+
+			if l < 2 || ConvertCallArgs(args[2:], &cargs) {
+				ret := Call64(h, uint64(args[0].Value.(float64)), flags, cargs...)
+				if flags&0x08 != 0 {
+					var r []Variable
+					for _, b := range ret {
+						r = append(r, MakeVariable(VAR_NUMBER, float64(b)))
+					}
+					return MakeVariable(VAR_ARRAY, &r)
+				}
+
+				if flags&0x02 != 0 || flags&0x04 != 0 {
+					return MakeVariable(VAR_NUMBER, *(*float64)(unsafe.Pointer(&ret[0])))
+				}
+
+				return MakeVariable(VAR_NUMBER, float64(*(*int64)(unsafe.Pointer(&ret[0]))))
+			}
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
 func process_Suspend(this *Variable, args []Variable) Variable {
 	if h := GetProcessHandle(this); h != 0 {
 		NtSuspendProcess(h)
@@ -1354,38 +2414,33 @@ func process_Resume(this *Variable, args []Variable) Variable {
 func process_Modules(this *Variable, args []Variable) Variable {
 	var modules []Variable
 
-	if this != nil {
-		if p := *this; p.Type == VAR_OBJECT {
-			if v, ok := (*p.Value.(*map[string]*Variable))["Id"]; ok && v.Type == VAR_NUMBER {
-				id := uint32(v.Value.(float64))
-				if len(args) > 0 && args[0].Type == VAR_STRING {
-					entry := GetModuleInfoByName(id, args[0].Value.(string))
-					m := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
-					AddProp(&m, "Size", MakeVariable(VAR_NUMBER, float64(entry.ModBaseSize)))
-					AddProp(&m, "Base", MakeVariable(VAR_NUMBER, float64(uintptr(unsafe.Pointer(entry.ModBaseAddr)))))
-					AddProp(&m, "Name", MakeVariable(VAR_STRING, windows.UTF16ToString(entry.SzModule[:])))
-					return m
-				} else {
-					snapshot := w32.CreateToolhelp32Snapshot(w32.TH32CS_SNAPMODULE|w32.TH32CS_SNAPMODULE32, id)
-					if snapshot != 0 {
-						var entry w32.MODULEENTRY32
-						entry.Size = uint32(unsafe.Sizeof(entry))
+	if id := GetId(this); id != 0 {
+		if len(args) > 0 && args[0].Type == VAR_STRING {
+			entry := GetModuleInfoByName(id, args[0].Value.(string))
+			m := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
+			AddProp(&m, "Size", MakeVariable(VAR_NUMBER, float64(entry.ModBaseSize)))
+			AddProp(&m, "Base", MakeVariable(VAR_NUMBER, float64(uintptr(unsafe.Pointer(entry.ModBaseAddr)))))
+			AddProp(&m, "Name", MakeVariable(VAR_STRING, windows.UTF16ToString(entry.SzModule[:])))
+			return m
+		} else {
+			snapshot := w32.CreateToolhelp32Snapshot(w32.TH32CS_SNAPMODULE|w32.TH32CS_SNAPMODULE32, id)
+			if snapshot != 0 {
+				var entry w32.MODULEENTRY32
+				entry.Size = uint32(unsafe.Sizeof(entry))
 
-						if w32.Module32First(snapshot, &entry) {
-							c := true
-							for c {
-								m := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
-								AddProp(&m, "Size", MakeVariable(VAR_NUMBER, float64(entry.ModBaseSize)))
-								AddProp(&m, "Base", MakeVariable(VAR_NUMBER, float64(uintptr(unsafe.Pointer(entry.ModBaseAddr)))))
-								AddProp(&m, "Name", MakeVariable(VAR_STRING, windows.UTF16ToString(entry.SzModule[:])))
-								modules = append(modules, m)
-								c = w32.Module32Next(snapshot, &entry)
-							}
-						}
-
-						w32.CloseHandle(snapshot)
+				if w32.Module32First(snapshot, &entry) {
+					c := true
+					for c {
+						m := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
+						AddProp(&m, "Size", MakeVariable(VAR_NUMBER, float64(entry.ModBaseSize)))
+						AddProp(&m, "Base", MakeVariable(VAR_NUMBER, float64(uintptr(unsafe.Pointer(entry.ModBaseAddr)))))
+						AddProp(&m, "Name", MakeVariable(VAR_STRING, windows.UTF16ToString(entry.SzModule[:])))
+						modules = append(modules, m)
+						c = w32.Module32Next(snapshot, &entry)
 					}
 				}
+
+				w32.CloseHandle(snapshot)
 			}
 		}
 	}
@@ -1479,43 +2534,42 @@ func process_Threads(this *Variable, args []Variable) Variable {
 	var threads []Variable
 
 	if process := GetProcessHandle(this); process != 0 {
-		m := *(*this).Value.(*map[string]*Variable)
-		if v, ok := m["Id"]; ok && v.Type == VAR_NUMBER {
-			id := w32.DWORD(v.Value.(float64))
-			snapshot := w32.CreateToolhelp32Snapshot(w32.TH32CS_SNAPTHREAD, 0)
-			if snapshot != 0 {
-				var entry THREADENTRY32
-				entry.DwSize = w32.DWORD(unsafe.Sizeof(entry))
+		if id := w32.DWORD(GetId(this)); id != 0 {
+			if v, ok := (*(*this).Value.(*map[string]*Variable))["Wow64"]; ok && v.Type == VAR_NUMBER {
+				if i := int(v.Value.(float64)); i == 0 || i == 1 {
+					stack_func := ([](func(w32.HANDLE, w32.DWORD, w32.HANDLE) uint64){GetThreadStack64, GetThreadStack32})[i]
 
-				if Thread32First(snapshot, &entry) {
-					c := true
-					for c {
-						if entry.Th32OwnerProcessID == id {
-							t := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
-							AddProp(&t, "Id", MakeVariable(VAR_NUMBER, float64(entry.Th32ThreadID)))
-							AddProp(&t, "Owner", MakeVariable(VAR_NUMBER, float64(entry.Th32ThreadID)))
-							AddProp(&t, "Priority", MakeVariable(VAR_NUMBER, float64(entry.TpBasePri)))
+					snapshot := w32.CreateToolhelp32Snapshot(w32.TH32CS_SNAPTHREAD, 0)
+					if snapshot != 0 {
+						var entry THREADENTRY32
+						entry.DwSize = w32.DWORD(unsafe.Sizeof(entry))
 
-							time := int64(0)
-							stack := uint64(0)
-							if handle := OpenThread(0x0008|0x0002|0x0040, w32.BOOL(0), entry.Th32ThreadID); handle != 0 {
-								time = GetThreadCreationTime(handle)
-								if v, ok := m["Wow64"]; ok && v.Type == VAR_NUMBER {
-									if i := int(v.Value.(float64)); i == 0 || i == 1 {
-										funcs := [](func(w32.HANDLE, w32.DWORD, w32.HANDLE) uint64){GetThreadStack64, GetThreadStack32}
-										stack = funcs[i](process, id, handle)
+						if Thread32First(snapshot, &entry) {
+							c := true
+							for c {
+								if entry.Th32OwnerProcessID == id {
+									t := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
+									AddProp(&t, "Id", MakeVariable(VAR_NUMBER, float64(entry.Th32ThreadID)))
+									AddProp(&t, "Owner", MakeVariable(VAR_NUMBER, float64(entry.Th32OwnerProcessID)))
+									AddProp(&t, "Priority", MakeVariable(VAR_NUMBER, float64(entry.TpBasePri)))
+
+									time := int64(0)
+									stack := uint64(0)
+									if handle := OpenThread(0x0008|0x0002|0x0040, w32.BOOL(0), entry.Th32ThreadID); handle != 0 {
+										time = GetThreadCreationTime(handle)
+										stack = stack_func(process, id, handle)
+										w32.CloseHandle(handle)
 									}
-								}
-								w32.CloseHandle(handle)
-							}
-							AddProp(&t, "CreationTime", MakeVariable(VAR_NUMBER, float64(time)))
-							AddProp(&t, "Stack", MakeVariable(VAR_NUMBER, float64(stack)))
-							AddProp(&t, "Suspend", MakeVariable(VAR_NFUNCTION, thread_Suspend))
-							AddProp(&t, "Resume", MakeVariable(VAR_NFUNCTION, thread_Resume))
+									AddProp(&t, "CreationTime", MakeVariable(VAR_NUMBER, float64(time)))
+									AddProp(&t, "Stack", MakeVariable(VAR_NUMBER, float64(stack)))
+									AddProp(&t, "Suspend", MakeVariable(VAR_NFUNCTION, thread_Suspend))
+									AddProp(&t, "Resume", MakeVariable(VAR_NFUNCTION, thread_Resume))
 
-							threads = append(threads, t)
+									threads = append(threads, t)
+								}
+								c = Thread32Next(snapshot, &entry)
+							}
 						}
-						c = Thread32Next(snapshot, &entry)
 					}
 				}
 			}
@@ -1531,32 +2585,16 @@ func process_Threads(this *Variable, args []Variable) Variable {
 
 func process_LoadLibrary32(this *Variable, args []Variable) Variable {
 	if h := GetProcessHandle(this); h != 0 && len(args) > 0 && args[0].Type == VAR_STRING {
-		if v, ok := (*(*this).Value.(*map[string]*Variable))["Id"]; ok && v.Type == VAR_NUMBER {
+		if id := GetId(this); id != 0 {
 			path := make([]uint16, 0xFF)
 			windows.GetFullPathName(windows.StringToUTF16Ptr(args[0].Value.(string)), 0xFF, (*uint16)(unsafe.Pointer(&path[0])), nil)
-
-			mod := GetModuleInfoByName(uint32(v.Value.(float64)), "kernelbase.dll")
-			proc := uint32(FindPattern(h, []byte{0x83, 0xEC, 0x1C, 0x53, 0x56, 0x57, 0x85, 0xC0}, []byte("xxxxxxxx"), uint64(uintptr(unsafe.Pointer(mod.ModBaseAddr))), uint64(mod.ModBaseSize)))
-
-			if proc != 0 {
-				proc -= 17
-				if WriteProcessMemory(h, uintptr(proc), uintptr(unsafe.Pointer(&([]byte{0x8B, 0xFF, 0x55, 0x8B, 0xEC, 0x5D}[0]))), 6) == nil {
-					if arg, err := w32.VirtualAllocEx(h, 0, 510, w32.MEM_RESERVE|w32.MEM_COMMIT, w32.PAGE_EXECUTE_READWRITE); err == nil && WriteProcessMemory(h, arg, uintptr(unsafe.Pointer(&path[0])), 510) == nil {
-						if stub, err := w32.VirtualAllocEx(h, 0, 0xFF, w32.MEM_RESERVE|w32.MEM_COMMIT, w32.PAGE_EXECUTE_READWRITE); err == nil {
-							b := []byte{0x6A, 0x00, 0x6A, 0x00, 0x68, 0x00, 0x00, 0x00, 0x00, 0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3}
-							*(*uint32)(unsafe.Pointer(&b[5])) = uint32(arg)
-							*(*uint32)(unsafe.Pointer(&b[10])) = uint32(proc) - (uint32(stub) + 14)
-							if WriteProcessMemory(h, stub, uintptr(unsafe.Pointer(&b[0])), uint(len(b))) == nil {
-								if thread := CreateRemoteThread(h, stub, 0); thread != 0 {
-									windows.WaitForSingleObject(windows.Handle(thread), w32.INFINITE)
-									w32.CloseHandle(thread)
-								}
-							}
-							w32.VirtualFreeEx(h, stub, 0, w32.MEM_RELEASE|w32.MEM_DECOMMIT)
-						}
-						w32.VirtualFreeEx(h, arg, 0, w32.MEM_RELEASE|w32.MEM_DECOMMIT)
-					}
+			if arg := VirtualAllocEx(h, 0, 510, w32.MEM_RESERVE|w32.MEM_COMMIT, w32.PAGE_EXECUTE_READWRITE); arg != 0 && WriteProcessMemory(h, arg, uintptr(unsafe.Pointer(&path[0])), 510) == nil {
+				if thread := CreateRemoteThread(h, uintptr(GetProcAddressEx32(h, id, "kernel32.dll", "LoadLibraryW")), arg); thread != 0 {
+					windows.WaitForSingleObject(windows.Handle(thread), w32.INFINITE)
+					w32.CloseHandle(thread)
 				}
+
+				w32.VirtualFreeEx(h, arg, 0, w32.MEM_RELEASE)
 			}
 		}
 	}
@@ -1573,13 +2611,13 @@ func process_LoadLibrary64(this *Variable, args []Variable) Variable {
 		addr, _ := windows.GetProcAddress(windows.Handle(dll.Handle), "LoadLibraryW")
 		dll.Release()
 
-		arg, err := w32.VirtualAllocEx(h, 0, 510, w32.MEM_RESERVE|w32.MEM_COMMIT, w32.PAGE_EXECUTE_READWRITE)
-		if err == nil && WriteProcessMemory(h, arg, uintptr(unsafe.Pointer(&path[0])), 510) == nil {
+		if arg := VirtualAllocEx(h, 0, 510, w32.MEM_RESERVE|w32.MEM_COMMIT, w32.PAGE_EXECUTE_READWRITE); arg != 0 && WriteProcessMemory(h, arg, uintptr(unsafe.Pointer(&path[0])), 510) == nil {
 			if thread := CreateRemoteThread(h, addr, arg); thread != 0 {
 				windows.WaitForSingleObject(windows.Handle(thread), w32.INFINITE)
-				w32.VirtualFreeEx(h, arg, 0, w32.MEM_RELEASE|w32.MEM_DECOMMIT)
 				w32.CloseHandle(thread)
 			}
+
+			w32.VirtualFreeEx(h, arg, 0, w32.MEM_RELEASE)
 		}
 	}
 
@@ -1587,14 +2625,10 @@ func process_LoadLibrary64(this *Variable, args []Variable) Variable {
 }
 
 func thread_Suspend(this *Variable, args []Variable) Variable {
-	if this != nil {
-		if p := *this; p.Type == VAR_OBJECT {
-			if v, ok := (*p.Value.(*map[string]*Variable))["Id"]; ok && v.Type == VAR_NUMBER {
-				if handle := OpenThread(0x0002, w32.BOOL(0), w32.DWORD(v.Value.(float64))); handle != 0 {
-					SuspendThread(handle)
-					w32.CloseHandle(handle)
-				}
-			}
+	if id := w32.DWORD(GetId(this)); id != 0 {
+		if handle := OpenThread(0x0002, w32.BOOL(0), id); handle != 0 {
+			SuspendThread(handle)
+			w32.CloseHandle(handle)
 		}
 	}
 
@@ -1602,14 +2636,10 @@ func thread_Suspend(this *Variable, args []Variable) Variable {
 }
 
 func thread_Resume(this *Variable, args []Variable) Variable {
-	if this != nil {
-		if p := *this; p.Type == VAR_OBJECT {
-			if v, ok := (*p.Value.(*map[string]*Variable))["Id"]; ok && v.Type == VAR_NUMBER {
-				if handle := OpenThread(0x0002, w32.BOOL(0), w32.DWORD(v.Value.(float64))); handle != 0 {
-					ResumeThread(handle)
-					w32.CloseHandle(handle)
-				}
-			}
+	if id := w32.DWORD(GetId(this)); id != 0 {
+		if handle := OpenThread(0x0002, w32.BOOL(0), id); handle != 0 {
+			ResumeThread(handle)
+			w32.CloseHandle(handle)
 		}
 	}
 
@@ -1624,9 +2654,13 @@ func process_Close(this *Variable, args []Variable) Variable {
 	return MakeVariable(VAR_NUMBER, float64(0))
 }
 
-func process_Kill(this *Variable, args []Variable) Variable {
+func process_Exit(this *Variable, args []Variable) Variable {
 	if h := GetProcessHandle(this); h != 0 {
-		w32.TerminateProcess(h, 0)
+		code := uint(0)
+		if len(args) > 0 && args[0].Type == VAR_NUMBER {
+			code = uint(args[0].Value.(float64))
+		}
+		w32.TerminateProcess(h, code)
 	}
 
 	return MakeVariable(VAR_NUMBER, float64(0))
@@ -1668,27 +2702,40 @@ func FindPattern(handle w32.HANDLE, pattern []byte, mask []byte, min uint64, siz
 
 func process_FindPattern(this *Variable, args []Variable) Variable {
 	if h := GetProcessHandle(this); h != 0 {
-		if l := len(args); l == 1 && args[0].Type == VAR_STRING {
-			if v := strings.Replace(args[0].Value.(string), " ", "", -1); len(v)%2 == 0 {
-				var pattern []byte
-				var mask []byte
+		if l := len(args); l == 1 {
+			if args[0].Type == VAR_STRING {
+				if v := strings.Replace(args[0].Value.(string), " ", "", -1); len(v)%2 == 0 {
+					var pattern []byte
+					var mask []byte
 
-				for i := 0; i < len(v); i += 2 {
-					if v[i] == '?' {
-						pattern = append(pattern, 0)
-						mask = append(mask, '?')
-					} else {
-						b, err := strconv.ParseInt(v[i:i+2], 16, 64)
-						if err != nil {
-							return MakeVariable(VAR_NUMBER, float64(0))
+					for i := 0; i < len(v); i += 2 {
+						if v[i] == '?' {
+							pattern = append(pattern, 0)
+							mask = append(mask, '?')
+						} else {
+							b, err := strconv.ParseInt(v[i:i+2], 16, 64)
+							if err != nil {
+								return MakeVariable(VAR_NUMBER, float64(0))
+							}
+
+							pattern = append(pattern, byte(b))
+							mask = append(mask, 'x')
 						}
-
-						pattern = append(pattern, byte(b))
-						mask = append(mask, 'x')
 					}
-				}
 
-				return MakeVariable(VAR_NUMBER, float64(FindPattern(h, pattern, mask, 0, 0)))
+					return MakeVariable(VAR_NUMBER, float64(FindPattern(h, pattern, mask, 0, 0)))
+				}
+			} else if args[0].Type == VAR_ARRAY {
+				var b []byte
+				var mask []byte
+				for _, e := range *args[0].Value.(*[]Variable) {
+					if e.Type != VAR_NUMBER {
+						return MakeVariable(VAR_NUMBER, float64(0))
+					}
+					b = append(b, byte(e.Value.(float64)))
+					mask = append(mask, byte('x'))
+				}
+				return MakeVariable(VAR_NUMBER, float64(FindPattern(h, b, mask, 0, 0)))
 			}
 		} else if l > 1 && args[1].Type == VAR_STRING {
 			mask := []byte(args[1].Value.(string))
@@ -1762,6 +2809,56 @@ func process_ReadPointer64(this *Variable, args []Variable) Variable {
 	return MakeVariable(VAR_NUMBER, float64(base))
 }
 
+func process_Protect(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 && len(args) > 2 && args[0].Type == VAR_NUMBER && args[1].Type == VAR_NUMBER && args[2].Type == VAR_NUMBER {
+		return MakeVariable(VAR_NUMBER, float64(VirtualProtectEx(h, uintptr(uint64(args[0].Value.(float64))), uint32(args[1].Value.(float64)), uint32(args[2].Value.(float64)))))
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func process_Alloc(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 {
+		if l := len(args); l > 0 && args[0].Type == VAR_NUMBER {
+			size := uint32(args[0].Value.(float64))
+			alloc_type := uint32(w32.MEM_COMMIT | w32.MEM_RESERVE)
+			protect := uint32(w32.PAGE_EXECUTE_READWRITE)
+
+			if l > 1 && args[1].Type == VAR_NUMBER {
+				alloc_type = uint32(args[1].Value.(float64))
+				if l > 2 && args[1].Type == VAR_NUMBER {
+					protect = uint32(args[2].Value.(float64))
+				}
+			}
+
+			return MakeVariable(VAR_NUMBER, float64(VirtualAllocEx(h, uintptr(0), size, alloc_type, protect)))
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func process_Free(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 {
+		if l := len(args); l > 0 && args[0].Type == VAR_NUMBER {
+			addr := uintptr(uint64(args[0].Value.(float64)))
+			size := uintptr(0)
+			free_type := uint32(w32.MEM_RELEASE)
+
+			if l > 2 && args[1].Type == VAR_NUMBER && args[2].Type == VAR_NUMBER {
+				size = uintptr(uint32(args[1].Value.(float64)))
+				free_type = uint32(args[2].Value.(float64))
+			}
+
+			if w32.VirtualFreeEx(h, addr, size, free_type) {
+				return MakeVariable(VAR_NUMBER, float64(1))
+			}
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
 func process_Read(this *Variable, args []Variable) Variable {
 	var bytes []Variable
 
@@ -1789,13 +2886,121 @@ func process_Write(this *Variable, args []Variable) Variable {
 			b = append(b, byte(e.Value.(float64)))
 		}
 
-		WriteProcessMemory(h, uintptr(args[0].Value.(float64)), uintptr(unsafe.Pointer(&b[0])), uint(len(b)))
+		if WriteProcessMemory(h, uintptr(uint64(args[0].Value.(float64))), uintptr(unsafe.Pointer(&b[0])), uint(len(b))) == nil {
+			return MakeVariable(VAR_NUMBER, float64(1))
+		}
 	}
 
 	return MakeVariable(VAR_NUMBER, float64(0))
 }
 
-func process_ReadInt(this *Variable, args []Variable) Variable {
+func process_ReadString(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 && len(args) > 0 && args[0].Type == VAR_NUMBER {
+		var str []byte
+
+		base := uint64(args[0].Value.(float64))
+	loop:
+		for {
+			bytes, _ := ReadProcessMemory(h, uintptr(base), 0x1000)
+			if len(bytes) == 0 {
+				break
+			}
+
+			for _, b := range bytes {
+				if b == 0 {
+					break loop
+				}
+
+				str = append(str, b)
+			}
+
+			base += 0x1000
+		}
+
+		return MakeVariable(VAR_STRING, string(str))
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func process_WriteString(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 && len(args) > 1 && args[0].Type == VAR_NUMBER && args[1].Type == VAR_STRING {
+		b := append([]byte(args[1].Value.(string)), 0)
+		if WriteProcessMemory(h, uintptr(uint64(args[0].Value.(float64))), uintptr(unsafe.Pointer(&b[0])), uint(len(b))) == nil {
+			return MakeVariable(VAR_NUMBER, float64(1))
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func process_ReadString16(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 && len(args) > 0 && args[0].Type == VAR_NUMBER {
+		var str []uint16
+
+		base := uint64(args[0].Value.(float64))
+	loop:
+		for {
+			bytes, _ := ReadProcessMemory(h, uintptr(base), 0x1000)
+			if l := len(bytes); l == 0 {
+				break
+			} else if l%2 != 0 {
+				bytes = bytes[0 : l-1]
+			}
+
+			for i := 0; i < len(bytes); i += 2 {
+				v := *(*uint16)(unsafe.Pointer(&bytes[i]))
+				if v == 0 {
+					break loop
+				}
+
+				str = append(str, v)
+			}
+
+			base += 0x1000
+		}
+
+		return MakeVariable(VAR_STRING, windows.UTF16ToString(str))
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func process_WriteString16(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 && len(args) > 1 && args[0].Type == VAR_NUMBER && args[1].Type == VAR_STRING {
+		if b, err := windows.UTF16FromString(args[1].Value.(string)); err == nil {
+			if WriteProcessMemory(h, uintptr(uint64(args[0].Value.(float64))), uintptr(unsafe.Pointer(&b[0])), uint(len(b)*2)) == nil {
+				return MakeVariable(VAR_NUMBER, float64(1))
+			}
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func process_ReadInt16(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 && len(args) > 0 && args[0].Type == VAR_NUMBER {
+		data, err := ReadProcessMemory(h, uintptr(args[0].Value.(float64)), 4)
+		if err == nil {
+			return MakeVariable(VAR_NUMBER, float64(*(*int16)(unsafe.Pointer(&data[0]))))
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func process_WriteInt16(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 && len(args) > 1 && args[0].Type == VAR_NUMBER && args[1].Type == VAR_NUMBER {
+		b := int16(args[1].Value.(float64))
+		if WriteProcessMemory(h, uintptr(args[0].Value.(float64)), uintptr(unsafe.Pointer(&b)), uint(unsafe.Sizeof(b))) == nil {
+			return MakeVariable(VAR_NUMBER, float64(1))
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func process_ReadInt32(this *Variable, args []Variable) Variable {
 	if h := GetProcessHandle(this); h != 0 && len(args) > 0 && args[0].Type == VAR_NUMBER {
 		data, err := ReadProcessMemory(h, uintptr(args[0].Value.(float64)), 4)
 		if err == nil {
@@ -1806,10 +3011,12 @@ func process_ReadInt(this *Variable, args []Variable) Variable {
 	return MakeVariable(VAR_NUMBER, float64(0))
 }
 
-func process_WriteInt(this *Variable, args []Variable) Variable {
+func process_WriteInt32(this *Variable, args []Variable) Variable {
 	if h := GetProcessHandle(this); h != 0 && len(args) > 1 && args[0].Type == VAR_NUMBER && args[1].Type == VAR_NUMBER {
-		b := int(args[1].Value.(float64))
-		WriteProcessMemory(h, uintptr(args[0].Value.(float64)), uintptr(unsafe.Pointer(&b)), uint(unsafe.Sizeof(b)))
+		b := int32(args[1].Value.(float64))
+		if WriteProcessMemory(h, uintptr(args[0].Value.(float64)), uintptr(unsafe.Pointer(&b)), uint(unsafe.Sizeof(b))) == nil {
+			return MakeVariable(VAR_NUMBER, float64(1))
+		}
 	}
 
 	return MakeVariable(VAR_NUMBER, float64(0))
@@ -1829,13 +3036,37 @@ func process_ReadInt64(this *Variable, args []Variable) Variable {
 func process_WriteInt64(this *Variable, args []Variable) Variable {
 	if h := GetProcessHandle(this); h != 0 && len(args) > 1 && args[0].Type == VAR_NUMBER && args[1].Type == VAR_NUMBER {
 		b := int64(args[1].Value.(float64))
-		WriteProcessMemory(h, uintptr(args[0].Value.(float64)), uintptr(unsafe.Pointer(&b)), uint(unsafe.Sizeof(b)))
+		if WriteProcessMemory(h, uintptr(args[0].Value.(float64)), uintptr(unsafe.Pointer(&b)), uint(unsafe.Sizeof(b))) == nil {
+			return MakeVariable(VAR_NUMBER, float64(1))
+		}
 	}
 
 	return MakeVariable(VAR_NUMBER, float64(0))
 }
 
-func process_ReadUint(this *Variable, args []Variable) Variable {
+func process_ReadUint16(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 && len(args) > 0 && args[0].Type == VAR_NUMBER {
+		data, err := ReadProcessMemory(h, uintptr(args[0].Value.(float64)), 4)
+		if err == nil {
+			return MakeVariable(VAR_NUMBER, float64(*(*uint16)(unsafe.Pointer(&data[0]))))
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func process_WriteUint16(this *Variable, args []Variable) Variable {
+	if h := GetProcessHandle(this); h != 0 && len(args) > 1 && args[0].Type == VAR_NUMBER && args[1].Type == VAR_NUMBER {
+		b := uint16(args[1].Value.(float64))
+		if WriteProcessMemory(h, uintptr(args[0].Value.(float64)), uintptr(unsafe.Pointer(&b)), uint(unsafe.Sizeof(b))) == nil {
+			return MakeVariable(VAR_NUMBER, float64(1))
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func process_ReadUint32(this *Variable, args []Variable) Variable {
 	if h := GetProcessHandle(this); h != 0 && len(args) > 0 && args[0].Type == VAR_NUMBER {
 		data, err := ReadProcessMemory(h, uintptr(args[0].Value.(float64)), 4)
 		if err == nil {
@@ -1846,10 +3077,12 @@ func process_ReadUint(this *Variable, args []Variable) Variable {
 	return MakeVariable(VAR_NUMBER, float64(0))
 }
 
-func process_WriteUint(this *Variable, args []Variable) Variable {
+func process_WriteUint32(this *Variable, args []Variable) Variable {
 	if h := GetProcessHandle(this); h != 0 && len(args) > 1 && args[0].Type == VAR_NUMBER && args[1].Type == VAR_NUMBER {
-		b := uint(args[1].Value.(float64))
-		WriteProcessMemory(h, uintptr(args[0].Value.(float64)), uintptr(unsafe.Pointer(&b)), uint(unsafe.Sizeof(b)))
+		b := uint32(args[1].Value.(float64))
+		if WriteProcessMemory(h, uintptr(args[0].Value.(float64)), uintptr(unsafe.Pointer(&b)), uint(unsafe.Sizeof(b))) == nil {
+			return MakeVariable(VAR_NUMBER, float64(1))
+		}
 	}
 
 	return MakeVariable(VAR_NUMBER, float64(0))
@@ -1869,7 +3102,9 @@ func process_ReadUint64(this *Variable, args []Variable) Variable {
 func process_WriteUint64(this *Variable, args []Variable) Variable {
 	if h := GetProcessHandle(this); h != 0 && len(args) > 1 && args[0].Type == VAR_NUMBER && args[1].Type == VAR_NUMBER {
 		b := uint64(args[1].Value.(float64))
-		WriteProcessMemory(h, uintptr(args[0].Value.(float64)), uintptr(unsafe.Pointer(&b)), uint(unsafe.Sizeof(b)))
+		if WriteProcessMemory(h, uintptr(args[0].Value.(float64)), uintptr(unsafe.Pointer(&b)), uint(unsafe.Sizeof(b))) == nil {
+			return MakeVariable(VAR_NUMBER, float64(1))
+		}
 	}
 
 	return MakeVariable(VAR_NUMBER, float64(0))
@@ -1889,7 +3124,9 @@ func process_ReadFloat(this *Variable, args []Variable) Variable {
 func process_WriteFloat(this *Variable, args []Variable) Variable {
 	if h := GetProcessHandle(this); h != 0 && len(args) > 1 && args[0].Type == VAR_NUMBER && args[1].Type == VAR_NUMBER {
 		b := float32(args[1].Value.(float64))
-		WriteProcessMemory(h, uintptr(args[0].Value.(float64)), uintptr(unsafe.Pointer(&b)), uint(unsafe.Sizeof(b)))
+		if WriteProcessMemory(h, uintptr(args[0].Value.(float64)), uintptr(unsafe.Pointer(&b)), uint(unsafe.Sizeof(b))) == nil {
+			return MakeVariable(VAR_NUMBER, float64(1))
+		}
 	}
 
 	return MakeVariable(VAR_NUMBER, float64(0))
@@ -1909,7 +3146,9 @@ func process_ReadDouble(this *Variable, args []Variable) Variable {
 func process_WriteDouble(this *Variable, args []Variable) Variable {
 	if h := GetProcessHandle(this); h != 0 && len(args) > 1 && args[0].Type == VAR_NUMBER && args[1].Type == VAR_NUMBER {
 		b := args[1].Value.(float64)
-		WriteProcessMemory(h, uintptr(args[0].Value.(float64)), uintptr(unsafe.Pointer(&b)), uint(unsafe.Sizeof(b)))
+		if WriteProcessMemory(h, uintptr(args[0].Value.(float64)), uintptr(unsafe.Pointer(&b)), uint(unsafe.Sizeof(b))) == nil {
+			return MakeVariable(VAR_NUMBER, float64(1))
+		}
 	}
 
 	return MakeVariable(VAR_NUMBER, float64(0))
@@ -2028,34 +3267,6 @@ func input_SendKeys(this *Variable, args []Variable) Variable {
 	return MakeVariable(VAR_NUMBER, float64(0))
 }
 
-/***********************************************/
-/*                       proc                  */
-/***********************************************/
-func proc_GetAddress(this *Variable, args []Variable) Variable {
-	var r uintptr
-
-	if len(args) > 1 && args[0].Type == VAR_STRING && args[1].Type == VAR_STRING {
-		dll := syscall.MustLoadDLL(args[0].Value.(string))
-		r, _ = windows.GetProcAddress(windows.Handle(dll.Handle), args[1].Value.(string))
-		dll.Release()
-	}
-
-	return MakeVariable(VAR_NUMBER, float64(r))
-}
-
-func proc_GetRelativeAddress(this *Variable, args []Variable) Variable {
-	var r uintptr
-
-	if len(args) > 1 && args[0].Type == VAR_STRING && args[1].Type == VAR_STRING {
-		dll := syscall.MustLoadDLL(args[0].Value.(string))
-		r, _ = windows.GetProcAddress(windows.Handle(dll.Handle), args[1].Value.(string))
-		r -= uintptr(dll.Handle)
-		dll.Release()
-	}
-
-	return MakeVariable(VAR_NUMBER, float64(r))
-}
-
 /* helper functions */
 func CallUserFunc(v *Variable, args []Variable) Variable {
 	f := v.Value.([]Tree)
@@ -2103,19 +3314,20 @@ func InitStack() {
 	StackPush("false", nil, -1, MakeVariable(VAR_NUMBER, float64(0)))
 	StackPush("len", nil, -1, MakeVariable(VAR_NFUNCTION, global_len))
 	StackPush("type", nil, -1, MakeVariable(VAR_NFUNCTION, global_type))
+	StackPush("copy", nil, -1, MakeVariable(VAR_NFUNCTION, global_copy))
 
 	object := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
 	AddProp(&object, "Keys", MakeVariable(VAR_NFUNCTION, object_Keys))
 	StackPush("object", nil, -1, object)
 
 	array := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
-	AddProp(&array, "Push", MakeVariable(VAR_NFUNCTION, array_Push))
-	AddProp(&array, "Pop", MakeVariable(VAR_NFUNCTION, array_Pop))
+	AddProp(&array, "Each", MakeVariable(VAR_NFUNCTION, array_Each))
+	AddProp(&array, "Find", MakeVariable(VAR_NFUNCTION, array_Find))
 	AddProp(&array, "Insert", MakeVariable(VAR_NFUNCTION, array_Insert))
+	AddProp(&array, "Pop", MakeVariable(VAR_NFUNCTION, array_Pop))
+	AddProp(&array, "Push", MakeVariable(VAR_NFUNCTION, array_Push))
 	AddProp(&array, "Remove", MakeVariable(VAR_NFUNCTION, array_Remove))
 	AddProp(&array, "Sort", MakeVariable(VAR_NFUNCTION, array_Sort))
-	AddProp(&array, "Find", MakeVariable(VAR_NFUNCTION, array_Find))
-	AddProp(&array, "Each", MakeVariable(VAR_NFUNCTION, array_Each))
 	StackPush("array", nil, -1, array)
 
 	console := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
@@ -2127,35 +3339,69 @@ func InitStack() {
 
 	number := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
 	AddProp(&number, "ToString", MakeVariable(VAR_NFUNCTION, number_ToString))
+	AddProp(&number, "FromString", MakeVariable(VAR_NFUNCTION, string_ToNumber))
+	AddProp(&number, "ToInt16Bytes", MakeVariable(VAR_NFUNCTION, number_ToInt16Bytes))
+	AddProp(&number, "ToUint16Bytes", MakeVariable(VAR_NFUNCTION, number_ToUint16Bytes))
+	AddProp(&number, "ToIntBytes", MakeVariable(VAR_NFUNCTION, number_ToInt32Bytes))
+	AddProp(&number, "ToInt32Bytes", MakeVariable(VAR_NFUNCTION, number_ToInt32Bytes))
+	AddProp(&number, "ToUintBytes", MakeVariable(VAR_NFUNCTION, number_ToUint32Bytes))
+	AddProp(&number, "ToUint32Bytes", MakeVariable(VAR_NFUNCTION, number_ToUint32Bytes))
+	AddProp(&number, "ToInt64Bytes", MakeVariable(VAR_NFUNCTION, number_ToInt64Bytes))
+	AddProp(&number, "ToUint64Bytes", MakeVariable(VAR_NFUNCTION, number_ToUint64Bytes))
+	AddProp(&number, "ToFloat32Bytes", MakeVariable(VAR_NFUNCTION, number_ToFloat32Bytes))
+	AddProp(&number, "ToFloatBytes", MakeVariable(VAR_NFUNCTION, number_ToFloat32Bytes))
+	AddProp(&number, "ToFloat64Bytes", MakeVariable(VAR_NFUNCTION, number_ToFloat64Bytes))
+	AddProp(&number, "ToDoubleBytes", MakeVariable(VAR_NFUNCTION, number_ToFloat64Bytes))
+	AddProp(&number, "FromInt16Bytes", MakeVariable(VAR_NFUNCTION, number_FromInt16Bytes))
+	AddProp(&number, "FromUint16Bytes", MakeVariable(VAR_NFUNCTION, number_FromUint16Bytes))
+	AddProp(&number, "FromIntBytes", MakeVariable(VAR_NFUNCTION, number_FromInt32Bytes))
+	AddProp(&number, "FromUintBytes", MakeVariable(VAR_NFUNCTION, number_FromUint32Bytes))
+	AddProp(&number, "FromInt32Bytes", MakeVariable(VAR_NFUNCTION, number_FromInt32Bytes))
+	AddProp(&number, "FromUint32Bytes", MakeVariable(VAR_NFUNCTION, number_FromUint32Bytes))
+	AddProp(&number, "FromInt64Bytes", MakeVariable(VAR_NFUNCTION, number_FromInt64Bytes))
+	AddProp(&number, "FromUint64Bytes", MakeVariable(VAR_NFUNCTION, number_FromUint64Bytes))
+	AddProp(&number, "FromFloat32Bytes", MakeVariable(VAR_NFUNCTION, number_FromFloat32Bytes))
+	AddProp(&number, "FromFloatBytes", MakeVariable(VAR_NFUNCTION, number_FromFloat32Bytes))
+	AddProp(&number, "FromFloat64Bytes", MakeVariable(VAR_NFUNCTION, number_FromFloat64Bytes))
+	AddProp(&number, "FromDoubleBytes", MakeVariable(VAR_NFUNCTION, number_FromFloat64Bytes))
 	StackPush("number", nil, -1, number)
 
 	str := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
-	AddProp(&str, "ToNumber", MakeVariable(VAR_NFUNCTION, string_ToNumber))
-	AddProp(&str, "FromCharCode", MakeVariable(VAR_NFUNCTION, string_FromCharCode))
 	AddProp(&str, "CharCodeAt", MakeVariable(VAR_NFUNCTION, string_CharCodeAt))
 	AddProp(&str, "Contains", MakeVariable(VAR_NFUNCTION, string_Contains))
+	AddProp(&str, "FromCharCode", MakeVariable(VAR_NFUNCTION, string_FromCharCode))
+	AddProp(&str, "FromNumber", MakeVariable(VAR_NFUNCTION, number_ToString))
 	AddProp(&str, "IndexOf", MakeVariable(VAR_NFUNCTION, string_IndexOf))
 	AddProp(&str, "LastIndexOf", MakeVariable(VAR_NFUNCTION, string_LastIndexOf))
 	AddProp(&str, "Replace", MakeVariable(VAR_NFUNCTION, string_Replace))
 	AddProp(&str, "Slice", MakeVariable(VAR_NFUNCTION, string_Slice))
 	AddProp(&str, "Split", MakeVariable(VAR_NFUNCTION, string_Split))
-	AddProp(&str, "ToUpper", MakeVariable(VAR_NFUNCTION, string_ToUpper))
 	AddProp(&str, "ToLower", MakeVariable(VAR_NFUNCTION, string_ToLower))
+	AddProp(&str, "ToNumber", MakeVariable(VAR_NFUNCTION, string_ToNumber))
+	AddProp(&str, "ToUpper", MakeVariable(VAR_NFUNCTION, string_ToUpper))
 	AddProp(&str, "Trim", MakeVariable(VAR_NFUNCTION, string_Trim))
 	StackPush("string", nil, -1, str)
 
+	regex := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
+	AddProp(&regex, "Find", MakeVariable(VAR_NFUNCTION, regex_Find))
+	AddProp(&regex, "FindIndex", MakeVariable(VAR_NFUNCTION, regex_FindIndex))
+	AddProp(&regex, "Match", MakeVariable(VAR_NFUNCTION, regex_Match))
+	AddProp(&regex, "Replace", MakeVariable(VAR_NFUNCTION, regex_Replace))
+	AddProp(&regex, "Split", MakeVariable(VAR_NFUNCTION, regex_Split))
+	StackPush("regex", nil, -1, regex)
+
 	math_ := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
+	AddProp(&math_, "DEG_RAD", MakeVariable(VAR_NUMBER, 180/math.Pi))
 	AddProp(&math_, "E", MakeVariable(VAR_NUMBER, math.E))
-	AddProp(&math_, "LN2", MakeVariable(VAR_NUMBER, math.Ln2))
 	AddProp(&math_, "LN10", MakeVariable(VAR_NUMBER, math.Ln10))
-	AddProp(&math_, "LOG2E", MakeVariable(VAR_NUMBER, math.Log2E))
+	AddProp(&math_, "LN2", MakeVariable(VAR_NUMBER, math.Ln2))
 	AddProp(&math_, "LOG10E", MakeVariable(VAR_NUMBER, math.Log10E))
-	AddProp(&math_, "PI", MakeVariable(VAR_NUMBER, math.Pi))
+	AddProp(&math_, "LOG2E", MakeVariable(VAR_NUMBER, math.Log2E))
 	AddProp(&math_, "PHI", MakeVariable(VAR_NUMBER, math.Phi))
+	AddProp(&math_, "PI", MakeVariable(VAR_NUMBER, math.Pi))
+	AddProp(&math_, "RAD_DEG", MakeVariable(VAR_NUMBER, math.Pi/180))
 	AddProp(&math_, "SQRT1_2", MakeVariable(VAR_NUMBER, math.Sqrt(1.0/2.0)))
 	AddProp(&math_, "SQRT2", MakeVariable(VAR_NUMBER, math.Sqrt2))
-	AddProp(&math_, "DEG_RAD", MakeVariable(VAR_NUMBER, 180/math.Pi))
-	AddProp(&math_, "RAD_DEG", MakeVariable(VAR_NUMBER, math.Pi/180))
 	AddProp(&math_, "Abs", MakeVariable(VAR_NFUNCTION, math_Abs))
 	AddProp(&math_, "Acos", MakeVariable(VAR_NFUNCTION, math_Acos))
 	AddProp(&math_, "Acosh", MakeVariable(VAR_NFUNCTION, math_Acosh))
@@ -2171,8 +3417,8 @@ func InitStack() {
 	AddProp(&math_, "Floor", MakeVariable(VAR_NFUNCTION, math_Floor))
 	AddProp(&math_, "Hypot", MakeVariable(VAR_NFUNCTION, math_Hypot))
 	AddProp(&math_, "Log", MakeVariable(VAR_NFUNCTION, math_Log))
-	AddProp(&math_, "Log1p", MakeVariable(VAR_NFUNCTION, math_Log1p))
 	AddProp(&math_, "Log10", MakeVariable(VAR_NFUNCTION, math_Log10))
+	AddProp(&math_, "Log1p", MakeVariable(VAR_NFUNCTION, math_Log1p))
 	AddProp(&math_, "Log2", MakeVariable(VAR_NFUNCTION, math_Log2))
 	AddProp(&math_, "Max", MakeVariable(VAR_NFUNCTION, math_Max))
 	AddProp(&math_, "Min", MakeVariable(VAR_NFUNCTION, math_Min))
@@ -2218,6 +3464,8 @@ func InitStack() {
 	procWow64GetThreadContext, _ = dll.FindProc("Wow64GetThreadContext")
 	procWow64GetThreadSelectorEntry, _ = dll.FindProc("Wow64GetThreadSelectorEntry")
 	procGetThreadTimes, _ = dll.FindProc("GetThreadTimes")
+	procVirtualAllocEx, _ = dll.FindProc("VirtualAllocEx")
+	procVirtualProtectEx, _ = dll.FindProc("VirtualProtectEx")
 	dll.Release()
 
 	dll = syscall.MustLoadDLL("user32.dll")
@@ -2244,6 +3492,57 @@ func InitStack() {
 	AddProp(&process, "Open", MakeVariable(VAR_NFUNCTION, process_Open))
 	AddProp(&process, "List", MakeVariable(VAR_NFUNCTION, process_List))
 	AddProp(&process, "Current", process_Open(nil, []Variable{MakeVariable(VAR_NUMBER, float64(GetCurrentProcessId()))}))
+
+	AddProp(&process, "PAGE_EXECUTE", MakeVariable(VAR_NUMBER, float64(0x10)))
+	AddProp(&process, "PAGE_EXECUTE_READ", MakeVariable(VAR_NUMBER, float64(0x20)))
+	AddProp(&process, "PAGE_EXECUTE_READWRITE", MakeVariable(VAR_NUMBER, float64(0x40)))
+	AddProp(&process, "PAGE_EXECUTE_WRITECOPY", MakeVariable(VAR_NUMBER, float64(0x80)))
+	AddProp(&process, "PAGE_NOACCESS", MakeVariable(VAR_NUMBER, float64(0x01)))
+	AddProp(&process, "PAGE_READONLY", MakeVariable(VAR_NUMBER, float64(0x02)))
+	AddProp(&process, "PAGE_READWRITE", MakeVariable(VAR_NUMBER, float64(0x04)))
+	AddProp(&process, "PAGE_WRITECOPY", MakeVariable(VAR_NUMBER, float64(0x08)))
+	AddProp(&process, "PAGE_TARGETS_INVALID", MakeVariable(VAR_NUMBER, float64(0x40000000)))
+	AddProp(&process, "PAGE_TARGETS_NO_UPDATE", MakeVariable(VAR_NUMBER, float64(0x40000000)))
+	AddProp(&process, "PAGE_GUARD", MakeVariable(VAR_NUMBER, float64(0x100)))
+	AddProp(&process, "PAGE_NOCACHE", MakeVariable(VAR_NUMBER, float64(0x200)))
+	AddProp(&process, "PAGE_WRITECOMBINE", MakeVariable(VAR_NUMBER, float64(0x400)))
+
+	AddProp(&process, "MEM_COMMIT", MakeVariable(VAR_NUMBER, float64(0x00001000)))
+	AddProp(&process, "MEM_RESERVE", MakeVariable(VAR_NUMBER, float64(0x00002000)))
+	AddProp(&process, "MEM_RESET", MakeVariable(VAR_NUMBER, float64(0x00080000)))
+	AddProp(&process, "MEM_RESET_UNDO", MakeVariable(VAR_NUMBER, float64(0x1000000)))
+	AddProp(&process, "MEM_LARGE_PAGES", MakeVariable(VAR_NUMBER, float64(0x20000000)))
+	AddProp(&process, "MEM_PHYSICAL", MakeVariable(VAR_NUMBER, float64(0x00400000)))
+	AddProp(&process, "MEM_TOP_DOWN", MakeVariable(VAR_NUMBER, float64(0x00100000)))
+	AddProp(&process, "MEM_WRITE_WATCH", MakeVariable(VAR_NUMBER, float64(0x00200000)))
+	AddProp(&process, "MEM_COALESCE_PLACEHOLDERS", MakeVariable(VAR_NUMBER, float64(0x00000001)))
+	AddProp(&process, "MEM_PRESERVE_PLACEHOLDER", MakeVariable(VAR_NUMBER, float64(0x00000002)))
+	AddProp(&process, "MEM_DECOMMIT", MakeVariable(VAR_NUMBER, float64(0x4000)))
+	AddProp(&process, "MEM_RELEASE", MakeVariable(VAR_NUMBER, float64(0x8000)))
+
+	AddProp(&process, "FUNC_RET_INT", MakeVariable(VAR_NUMBER, float64(0x00)))
+	AddProp(&process, "FUNC_RET_INT32", MakeVariable(VAR_NUMBER, float64(0x00)))
+	AddProp(&process, "FUNC_RET_INT64", MakeVariable(VAR_NUMBER, float64(0x01)))
+	AddProp(&process, "FUNC_RET_FLOAT", MakeVariable(VAR_NUMBER, float64(0x02)))
+	AddProp(&process, "FUNC_RET_FLOAT32", MakeVariable(VAR_NUMBER, float64(0x02)))
+	AddProp(&process, "FUNC_RET_FLOAT64", MakeVariable(VAR_NUMBER, float64(0x04)))
+	AddProp(&process, "FUNC_RET_RAW", MakeVariable(VAR_NUMBER, float64(0x08)))
+	AddProp(&process, "FUNC_RET_NONE", MakeVariable(VAR_NUMBER, float64(0x10)))
+	AddProp(&process, "FUNC_CDECL", MakeVariable(VAR_NUMBER, float64(0x00)))
+	AddProp(&process, "FUNC_STDCALL", MakeVariable(VAR_NUMBER, float64(0x20)))
+	AddProp(&process, "FUNC_FASTCALL", MakeVariable(VAR_NUMBER, float64(0x40)))
+	AddProp(&process, "FUNC_THISCALL", MakeVariable(VAR_NUMBER, float64(0x80)))
+
+	AddProp(&process, "ARG_INT8", MakeVariable(VAR_NUMBER, float64(1)))
+	AddProp(&process, "ARG_INT16", MakeVariable(VAR_NUMBER, float64(2)))
+	AddProp(&process, "ARG_INT", MakeVariable(VAR_NUMBER, float64(4)))
+	AddProp(&process, "ARG_INT32", MakeVariable(VAR_NUMBER, float64(4)))
+	AddProp(&process, "ARG_INT64", MakeVariable(VAR_NUMBER, float64(8)))
+	AddProp(&process, "ARG_FLOAT", MakeVariable(VAR_NUMBER, float64(13)))
+	AddProp(&process, "ARG_FLOAT32", MakeVariable(VAR_NUMBER, float64(13)))
+	AddProp(&process, "ARG_FLOAT64", MakeVariable(VAR_NUMBER, float64(17)))
+	AddProp(&process, "ARG_RAW", MakeVariable(VAR_NUMBER, float64(0x80)))
+
 	StackPush("process", nil, -1, process)
 
 	input := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
@@ -2253,12 +3552,157 @@ func InitStack() {
 	AddProp(&input, "KeyUp", MakeVariable(VAR_NFUNCTION, input_KeyUp))
 	AddProp(&input, "IsKeyDown", MakeVariable(VAR_NFUNCTION, input_IsKeyDown))
 	AddProp(&input, "SendKeys", MakeVariable(VAR_NFUNCTION, input_SendKeys))
+	key := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
+	AddProp(&key, "LBUTTON", MakeVariable(VAR_NUMBER, float64(0x01)))
+	AddProp(&key, "RBUTTON", MakeVariable(VAR_NUMBER, float64(0x02)))
+	AddProp(&key, "CANCEL", MakeVariable(VAR_NUMBER, float64(0x03)))
+	AddProp(&key, "MBUTTON", MakeVariable(VAR_NUMBER, float64(0x04)))
+	AddProp(&key, "XBUTTON1", MakeVariable(VAR_NUMBER, float64(0x05)))
+	AddProp(&key, "XBUTTON2", MakeVariable(VAR_NUMBER, float64(0x06)))
+	AddProp(&key, "BACK", MakeVariable(VAR_NUMBER, float64(0x08)))
+	AddProp(&key, "BACKSPACE", MakeVariable(VAR_NUMBER, float64(0x08)))
+	AddProp(&key, "TAB", MakeVariable(VAR_NUMBER, float64(0x09)))
+	AddProp(&key, "CLEAR", MakeVariable(VAR_NUMBER, float64(0x0C)))
+	AddProp(&key, "RETURN", MakeVariable(VAR_NUMBER, float64(0x0D)))
+	AddProp(&key, "SHIFT", MakeVariable(VAR_NUMBER, float64(0x10)))
+	AddProp(&key, "CONTROL", MakeVariable(VAR_NUMBER, float64(0x11)))
+	AddProp(&key, "MENU", MakeVariable(VAR_NUMBER, float64(0x12)))
+	AddProp(&key, "PAUSE", MakeVariable(VAR_NUMBER, float64(0x13)))
+	AddProp(&key, "CAPITAL", MakeVariable(VAR_NUMBER, float64(0x14)))
+	AddProp(&key, "CAPSLOCK", MakeVariable(VAR_NUMBER, float64(0x14)))
+	AddProp(&key, "CAPS", MakeVariable(VAR_NUMBER, float64(0x14)))
+	AddProp(&key, "KANA", MakeVariable(VAR_NUMBER, float64(0x15)))
+	AddProp(&key, "HANGUEL", MakeVariable(VAR_NUMBER, float64(0x15)))
+	AddProp(&key, "HANGUL", MakeVariable(VAR_NUMBER, float64(0x15)))
+	AddProp(&key, "JUNJA", MakeVariable(VAR_NUMBER, float64(0x17)))
+	AddProp(&key, "FINAL", MakeVariable(VAR_NUMBER, float64(0x18)))
+	AddProp(&key, "HANJA", MakeVariable(VAR_NUMBER, float64(0x19)))
+	AddProp(&key, "KANJI", MakeVariable(VAR_NUMBER, float64(0x19)))
+	AddProp(&key, "ESCAPE", MakeVariable(VAR_NUMBER, float64(0x1B)))
+	AddProp(&key, "CONVERT", MakeVariable(VAR_NUMBER, float64(0x1C)))
+	AddProp(&key, "NONCONVERT", MakeVariable(VAR_NUMBER, float64(0x1D)))
+	AddProp(&key, "ACCEPT", MakeVariable(VAR_NUMBER, float64(0x1E)))
+	AddProp(&key, "MODECHANGE", MakeVariable(VAR_NUMBER, float64(0x1F)))
+	AddProp(&key, "SPACE", MakeVariable(VAR_NUMBER, float64(0x20)))
+	AddProp(&key, "PRIOR", MakeVariable(VAR_NUMBER, float64(0x21)))
+	AddProp(&key, "PAGEUP", MakeVariable(VAR_NUMBER, float64(0x21)))
+	AddProp(&key, "NEXT", MakeVariable(VAR_NUMBER, float64(0x22)))
+	AddProp(&key, "PAGEDOWN", MakeVariable(VAR_NUMBER, float64(0x22)))
+	AddProp(&key, "END", MakeVariable(VAR_NUMBER, float64(0x23)))
+	AddProp(&key, "HOME", MakeVariable(VAR_NUMBER, float64(0x24)))
+	AddProp(&key, "LEFT", MakeVariable(VAR_NUMBER, float64(0x25)))
+	AddProp(&key, "UP", MakeVariable(VAR_NUMBER, float64(0x26)))
+	AddProp(&key, "RIGHT", MakeVariable(VAR_NUMBER, float64(0x27)))
+	AddProp(&key, "DOWN", MakeVariable(VAR_NUMBER, float64(0x28)))
+	AddProp(&key, "SELECT", MakeVariable(VAR_NUMBER, float64(0x29)))
+	AddProp(&key, "PRINT", MakeVariable(VAR_NUMBER, float64(0x2A)))
+	AddProp(&key, "EXECUTE", MakeVariable(VAR_NUMBER, float64(0x2B)))
+	AddProp(&key, "SNAPSHOT", MakeVariable(VAR_NUMBER, float64(0x2C)))
+	AddProp(&key, "INSERT", MakeVariable(VAR_NUMBER, float64(0x2D)))
+	AddProp(&key, "DELETE", MakeVariable(VAR_NUMBER, float64(0x2E)))
+	AddProp(&key, "HELP", MakeVariable(VAR_NUMBER, float64(0x2F)))
+	AddProp(&key, "ZERO", MakeVariable(VAR_NUMBER, float64(0x30)))
+	AddProp(&key, "_0", MakeVariable(VAR_NUMBER, float64(0x30)))
+	AddProp(&key, "0", MakeVariable(VAR_NUMBER, float64(0x30)))
+	AddProp(&key, "ONE", MakeVariable(VAR_NUMBER, float64(0x31)))
+	AddProp(&key, "_1", MakeVariable(VAR_NUMBER, float64(0x31)))
+	AddProp(&key, "1", MakeVariable(VAR_NUMBER, float64(0x31)))
+	AddProp(&key, "TWO", MakeVariable(VAR_NUMBER, float64(0x32)))
+	AddProp(&key, "_2", MakeVariable(VAR_NUMBER, float64(0x32)))
+	AddProp(&key, "2", MakeVariable(VAR_NUMBER, float64(0x32)))
+	AddProp(&key, "THREE", MakeVariable(VAR_NUMBER, float64(0x33)))
+	AddProp(&key, "_3", MakeVariable(VAR_NUMBER, float64(0x33)))
+	AddProp(&key, "3", MakeVariable(VAR_NUMBER, float64(0x33)))
+	AddProp(&key, "FOUR", MakeVariable(VAR_NUMBER, float64(0x34)))
+	AddProp(&key, "_4", MakeVariable(VAR_NUMBER, float64(0x34)))
+	AddProp(&key, "4", MakeVariable(VAR_NUMBER, float64(0x34)))
+	AddProp(&key, "FIVE", MakeVariable(VAR_NUMBER, float64(0x35)))
+	AddProp(&key, "_5", MakeVariable(VAR_NUMBER, float64(0x35)))
+	AddProp(&key, "5", MakeVariable(VAR_NUMBER, float64(0x35)))
+	AddProp(&key, "SIX", MakeVariable(VAR_NUMBER, float64(0x36)))
+	AddProp(&key, "_6", MakeVariable(VAR_NUMBER, float64(0x36)))
+	AddProp(&key, "6", MakeVariable(VAR_NUMBER, float64(0x36)))
+	AddProp(&key, "SEVEN", MakeVariable(VAR_NUMBER, float64(0x37)))
+	AddProp(&key, "_7", MakeVariable(VAR_NUMBER, float64(0x37)))
+	AddProp(&key, "7", MakeVariable(VAR_NUMBER, float64(0x37)))
+	AddProp(&key, "EIGHT", MakeVariable(VAR_NUMBER, float64(0x38)))
+	AddProp(&key, "_8", MakeVariable(VAR_NUMBER, float64(0x38)))
+	AddProp(&key, "8", MakeVariable(VAR_NUMBER, float64(0x38)))
+	AddProp(&key, "NINE", MakeVariable(VAR_NUMBER, float64(0x39)))
+	AddProp(&key, "_9", MakeVariable(VAR_NUMBER, float64(0x39)))
+	AddProp(&key, "9", MakeVariable(VAR_NUMBER, float64(0x39)))
+	AddProp(&key, "A", MakeVariable(VAR_NUMBER, float64(0x41)))
+	AddProp(&key, "B", MakeVariable(VAR_NUMBER, float64(0x42)))
+	AddProp(&key, "C", MakeVariable(VAR_NUMBER, float64(0x43)))
+	AddProp(&key, "D", MakeVariable(VAR_NUMBER, float64(0x44)))
+	AddProp(&key, "E", MakeVariable(VAR_NUMBER, float64(0x45)))
+	AddProp(&key, "F", MakeVariable(VAR_NUMBER, float64(0x46)))
+	AddProp(&key, "G", MakeVariable(VAR_NUMBER, float64(0x47)))
+	AddProp(&key, "H", MakeVariable(VAR_NUMBER, float64(0x48)))
+	AddProp(&key, "I", MakeVariable(VAR_NUMBER, float64(0x49)))
+	AddProp(&key, "J", MakeVariable(VAR_NUMBER, float64(0x4A)))
+	AddProp(&key, "K", MakeVariable(VAR_NUMBER, float64(0x4B)))
+	AddProp(&key, "L", MakeVariable(VAR_NUMBER, float64(0x4C)))
+	AddProp(&key, "M", MakeVariable(VAR_NUMBER, float64(0x4D)))
+	AddProp(&key, "N", MakeVariable(VAR_NUMBER, float64(0x4E)))
+	AddProp(&key, "O", MakeVariable(VAR_NUMBER, float64(0x4F)))
+	AddProp(&key, "P", MakeVariable(VAR_NUMBER, float64(0x50)))
+	AddProp(&key, "Q", MakeVariable(VAR_NUMBER, float64(0x51)))
+	AddProp(&key, "R", MakeVariable(VAR_NUMBER, float64(0x52)))
+	AddProp(&key, "S", MakeVariable(VAR_NUMBER, float64(0x53)))
+	AddProp(&key, "T", MakeVariable(VAR_NUMBER, float64(0x54)))
+	AddProp(&key, "U", MakeVariable(VAR_NUMBER, float64(0x55)))
+	AddProp(&key, "V", MakeVariable(VAR_NUMBER, float64(0x56)))
+	AddProp(&key, "W", MakeVariable(VAR_NUMBER, float64(0x57)))
+	AddProp(&key, "X", MakeVariable(VAR_NUMBER, float64(0x58)))
+	AddProp(&key, "Y", MakeVariable(VAR_NUMBER, float64(0x59)))
+	AddProp(&key, "Z", MakeVariable(VAR_NUMBER, float64(0x5A)))
+	AddProp(&key, "LWIN", MakeVariable(VAR_NUMBER, float64(0x5B)))
+	AddProp(&key, "RWIN", MakeVariable(VAR_NUMBER, float64(0x5C)))
+	AddProp(&key, "APPS", MakeVariable(VAR_NUMBER, float64(0x5D)))
+	AddProp(&key, "SLEEP", MakeVariable(VAR_NUMBER, float64(0x5F)))
+	AddProp(&key, "NUMPAD0", MakeVariable(VAR_NUMBER, float64(0x60)))
+	AddProp(&key, "NUMPAD1", MakeVariable(VAR_NUMBER, float64(0x61)))
+	AddProp(&key, "NUMPAD2", MakeVariable(VAR_NUMBER, float64(0x62)))
+	AddProp(&key, "NUMPAD3", MakeVariable(VAR_NUMBER, float64(0x63)))
+	AddProp(&key, "NUMPAD4", MakeVariable(VAR_NUMBER, float64(0x64)))
+	AddProp(&key, "NUMPAD5", MakeVariable(VAR_NUMBER, float64(0x65)))
+	AddProp(&key, "NUMPAD6", MakeVariable(VAR_NUMBER, float64(0x66)))
+	AddProp(&key, "NUMPAD7", MakeVariable(VAR_NUMBER, float64(0x67)))
+	AddProp(&key, "NUMPAD8", MakeVariable(VAR_NUMBER, float64(0x68)))
+	AddProp(&key, "NUMPAD9", MakeVariable(VAR_NUMBER, float64(0x69)))
+	AddProp(&key, "MULTIPLY", MakeVariable(VAR_NUMBER, float64(0x6A)))
+	AddProp(&key, "ADD", MakeVariable(VAR_NUMBER, float64(0x6B)))
+	AddProp(&key, "SEPARATOR", MakeVariable(VAR_NUMBER, float64(0x6C)))
+	AddProp(&key, "SUBTRACT", MakeVariable(VAR_NUMBER, float64(0x6D)))
+	AddProp(&key, "DECIMAL", MakeVariable(VAR_NUMBER, float64(0x6E)))
+	AddProp(&key, "DIVIDE", MakeVariable(VAR_NUMBER, float64(0x6F)))
+	AddProp(&key, "F1", MakeVariable(VAR_NUMBER, float64(0x70)))
+	AddProp(&key, "F2", MakeVariable(VAR_NUMBER, float64(0x71)))
+	AddProp(&key, "F3", MakeVariable(VAR_NUMBER, float64(0x72)))
+	AddProp(&key, "F4", MakeVariable(VAR_NUMBER, float64(0x73)))
+	AddProp(&key, "F5", MakeVariable(VAR_NUMBER, float64(0x74)))
+	AddProp(&key, "F6", MakeVariable(VAR_NUMBER, float64(0x75)))
+	AddProp(&key, "F7", MakeVariable(VAR_NUMBER, float64(0x76)))
+	AddProp(&key, "F8", MakeVariable(VAR_NUMBER, float64(0x77)))
+	AddProp(&key, "F9", MakeVariable(VAR_NUMBER, float64(0x78)))
+	AddProp(&key, "F10", MakeVariable(VAR_NUMBER, float64(0x79)))
+	AddProp(&key, "F11", MakeVariable(VAR_NUMBER, float64(0x7A)))
+	AddProp(&key, "F12", MakeVariable(VAR_NUMBER, float64(0x7B)))
+	AddProp(&key, "F13", MakeVariable(VAR_NUMBER, float64(0x7C)))
+	AddProp(&key, "F14", MakeVariable(VAR_NUMBER, float64(0x7D)))
+	AddProp(&key, "F15", MakeVariable(VAR_NUMBER, float64(0x7E)))
+	AddProp(&key, "F16", MakeVariable(VAR_NUMBER, float64(0x7F)))
+	AddProp(&key, "F17", MakeVariable(VAR_NUMBER, float64(0x80)))
+	AddProp(&key, "F18", MakeVariable(VAR_NUMBER, float64(0x81)))
+	AddProp(&key, "F19", MakeVariable(VAR_NUMBER, float64(0x82)))
+	AddProp(&key, "F20", MakeVariable(VAR_NUMBER, float64(0x83)))
+	AddProp(&key, "F21", MakeVariable(VAR_NUMBER, float64(0x84)))
+	AddProp(&key, "F22", MakeVariable(VAR_NUMBER, float64(0x85)))
+	AddProp(&key, "F23", MakeVariable(VAR_NUMBER, float64(0x86)))
+	AddProp(&key, "F24", MakeVariable(VAR_NUMBER, float64(0x87)))
+	AddProp(&input, "Key", key)
 	StackPush("input", nil, -1, input)
-
-	proc := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
-	AddProp(&proc, "GetAddress", MakeVariable(VAR_NFUNCTION, proc_GetAddress))
-	AddProp(&proc, "GetRelativeAddress", MakeVariable(VAR_NFUNCTION, proc_GetRelativeAddress))
-	StackPush("proc", nil, -1, proc)
 
 	go func() {
 		w32.SetWindowsHookEx(w32.WH_KEYBOARD_LL, KeyboardHook, 0, 0)

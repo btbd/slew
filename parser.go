@@ -90,7 +90,7 @@ func Factor() Tree {
 	} else if Accept(TOKEN_OPEN_BRACE) {
 		tree := MakeTree(last_token)
 
-		for Accept(TOKEN_WORD) {
+		for Accept(TOKEN_WORD) || Accept(TOKEN_STRING) {
 			prop := MakeTree(last_token)
 			Expect(TOKEN_COLON)
 			prop.C = append(prop.C, Expression())
@@ -493,10 +493,14 @@ func Block() Tree {
 func IfTree() Tree {
 	tree := MakeTree(last_token)
 
+	Expect(TOKEN_OPEN_PAREN)
+
 	condition := Expression()
 	if IsNoTree(condition) {
 		ParseError("expected an expression after if")
 	}
+
+	Expect(TOKEN_CLOSE_PAREN)
 
 	Expect(TOKEN_OPEN_BRACE)
 	tree.C = append(tree.C, condition, Block())

@@ -247,7 +247,7 @@ func Tokenize(input string) []Token {
 							}
 
 							value = v
-						} else if exp := strings.IndexByte(strings.ToLower(match), 'e'); exp != -1 {
+						} else if exp := strings.IndexByte(strings.ToLower(match), 'e'); exp != -1 && strings.IndexByte(strings.ToLower(match), 'x') == -1 {
 							v, err := strconv.ParseFloat(match[:exp], 64)
 							if err != nil {
 								fmt.Fprintf(os.Stderr, "%d:%d: %s\n", line, col, err.Error())
@@ -264,7 +264,7 @@ func Tokenize(input string) []Token {
 						} else {
 							base := 0
 							trim := match
-							if strings.Index(match, "0b") != -1 {
+							if strings.HasPrefix(match, "0b") {
 								trim = trim[2:]
 								base = 2
 							} else if len(trim) > 1 && trim[0] == '0' && trim[1] != 'x' {
@@ -282,11 +282,12 @@ func Tokenize(input string) []Token {
 						}
 					} else if e.Type == TOKEN_STRING {
 						q := `\` + string(match[0])
-						s := match[1 : len(match)-1]
+						s := []rune(match[1 : len(match)-1])
 						r := ""
+
 					loop:
 						for i := 0; i < len(s); i++ {
-							c := s[i:]
+							c := string(s[i:])
 							if strings.HasPrefix(c, q) {
 								r += string(q[1])
 								i++
@@ -300,7 +301,7 @@ func Tokenize(input string) []Token {
 									os.Exit(1)
 								}
 
-								c = s[i:]
+								c = string(s[i:])
 
 								var b byte
 								fmt.Sscanf(c, "%02x", &b)
@@ -316,7 +317,7 @@ func Tokenize(input string) []Token {
 									os.Exit(1)
 								}
 
-								c = s[i:]
+								c = string(s[i:])
 
 								b := 0
 								fmt.Sscanf(c, "%04x", &b)

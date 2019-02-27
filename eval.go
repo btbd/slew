@@ -179,7 +179,7 @@ func ToString(variable Variable) string {
 
 func ReduceVariable(variable Variable) Variable {
 	if variable.Type == VAR_VARIABLE {
-		if variable.Value.(*Variable) != nil {
+		if v := variable.Value.(*Variable); v != nil {
 			return ReduceVariable(*variable.Value.(*Variable))
 		} else {
 			return MakeVariable(VAR_NUMBER, float64(0))
@@ -188,7 +188,7 @@ func ReduceVariable(variable Variable) Variable {
 		return ReduceVariable(variable.Value.(Variable))
 	} else if variable.Type == VAR_CHAR {
 		c := variable.Value.(VariableChar)
-		variable = MakeVariable(VAR_STRING, string((*c.Str).Value.(string)[c.I]))
+		variable = MakeVariable(VAR_STRING, string([]rune((*c.Str).Value.(string))[c.I]))
 	}
 
 	return variable
@@ -465,7 +465,7 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 				i := ReduceVariable(Eval(tree.C[1], thread, stack))
 				if i.Type == VAR_NUMBER {
 					index := int(i.Value.(float64))
-					if s := v.Value.(string); index >= 0 && index < len(s) {
+					if s := []rune(v.Value.(string)); index >= 0 && index < len(s) {
 						return MakeVariable(VAR_CHAR, VariableChar{Str: o.Value.(*Variable), I: index})
 					}
 				}
