@@ -568,7 +568,7 @@ console.Println("Status: " + resp.Status + "\nBody: " + resp.Body);
         - `process.MEM_LARGE_PAGES`
         - `process.MEM_PHYSICAL`
         - `process.MEM_TOP_DOWN`
-    - `protect` is the memory protection for the region of pages to be allocated (default `process.PAGE_EXECUTE_READWRITE`). It can be any of the [memory protection constants](#memory-protection-constants-full-doc-).
+    - `protect` is the memory protection for the region of pages to be allocated (default `process.PAGE_EXECUTE_READWRITE`). It can be any of the [memory protection constants](#memory-protection-constants-full-doc).
     - Returns the base address of the allocated region.
 - `.Call(address [, flags [, args...]])`
     - Calls a compiled function in the process at `address`.
@@ -649,7 +649,7 @@ console.Println(ret);
     - Returns an array of [module object](#module-object) for each module or the specified module in the process.
 - `.Protect(address, size, protect)`
     - Changes the protection on a region of committed pages in the virtual address space of the process from `address` to `address+size`. Returns the previous protection of the first page in the specified region of pages.
-    - `protect` can be any of the [memory protection constants](#memory-protection-constants-full-doc-).
+    - `protect` can be any of the [memory protection constants](#memory-protection-constants-full-doc).
 - `.Read(address, size)`
     - Returns an array of byte of `size` at the specified address.
 - `.ReadFloat32(address)`, `.ReadFloat(address)`
