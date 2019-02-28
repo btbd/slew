@@ -12,9 +12,11 @@ An interpreted language designed for WinAPI.
 
 If you have make, just do `make`. Or run the build command in the `Makefile`.
 
-To run a program, do `slew.exe <file>`.
+To run a script, do `slew.exe <file>`.
 
-To create an executable, do `slew.exe -o <output> <file>`
+To create an executable, do `slew.exe -o <output> <file>`.
+
+Run without arguments to start the REPL.
 
 ## Examples
 

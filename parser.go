@@ -10,6 +10,7 @@ type Tree struct {
 	C []Tree
 }
 
+var parse_error bool
 var parser_token_index int
 var parser_tokens []Token
 var current_token Token
@@ -22,7 +23,9 @@ func ParseError(format string, args ...interface{}) {
 		fmt.Fprintf(os.Stderr, "%d:%d: ", current_token.Line, current_token.Col)
 		fmt.Fprintf(os.Stderr, format+"\n", args...)
 	}
-	os.Exit(1)
+
+	parser_token_index = len(parser_tokens)
+	parse_error = true
 }
 
 func Next() {
@@ -532,6 +535,7 @@ func MakeTree(token Token, children ...Tree) Tree {
 }
 
 func Parse(tokens []Token) Tree {
+	parse_error = false
 	parser_tokens = tokens
 	parser_token_index = -1
 	Next()
@@ -539,6 +543,11 @@ func Parse(tokens []Token) Tree {
 	if parser_token_index < len(parser_tokens) {
 		ParseError("unexpected token: %v", current_token.Value)
 	}
+
+	if parse_error {
+		return MakeTree(Token{Type: TOKEN_BLOCK})
+	}
+
 	return tree
 }
 

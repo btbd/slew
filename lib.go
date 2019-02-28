@@ -69,8 +69,6 @@ func Copy(v Variable) Variable {
 		fallthrough
 	case VAR_STRING:
 		fallthrough
-	case VAR_UNKNOWN:
-		fallthrough
 	case VAR_FUNCTION:
 		fallthrough
 	case VAR_NFUNCTION:

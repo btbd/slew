@@ -243,7 +243,7 @@ func Tokenize(input string) []Token {
 							v, err := strconv.ParseFloat(match, 64)
 							if err != nil {
 								fmt.Fprintf(os.Stderr, "%d:%d: %s\n", line, col, err.Error())
-								os.Exit(1)
+								return []Token{}
 							}
 
 							value = v
@@ -251,13 +251,13 @@ func Tokenize(input string) []Token {
 							v, err := strconv.ParseFloat(match[:exp], 64)
 							if err != nil {
 								fmt.Fprintf(os.Stderr, "%d:%d: %s\n", line, col, err.Error())
-								os.Exit(1)
+								return []Token{}
 							}
 
 							p, err := strconv.ParseInt(match[exp+1:], 0, 64)
 							if err != nil {
 								fmt.Fprintf(os.Stderr, "%d:%d: %s\n", line, col, err.Error())
-								os.Exit(1)
+								return []Token{}
 							}
 
 							value = v * math.Pow(10, float64(p))
@@ -275,7 +275,7 @@ func Tokenize(input string) []Token {
 							v, err := strconv.ParseInt(trim, base, 64)
 							if err != nil {
 								fmt.Fprintf(os.Stderr, "%d:%d: %s\n", line, col, err.Error())
-								os.Exit(1)
+								return []Token{}
 							}
 
 							value = float64(v)
@@ -298,7 +298,7 @@ func Tokenize(input string) []Token {
 								i += 2
 								if i+1 >= len(s) {
 									fmt.Fprintf(os.Stderr, "%d:%d: Unexpected end of string: %s\n", line, col, match)
-									os.Exit(1)
+									return []Token{}
 								}
 
 								c = string(s[i:])
@@ -314,7 +314,7 @@ func Tokenize(input string) []Token {
 								i += 2
 								if i+3 >= len(s) {
 									fmt.Fprintf(os.Stderr, "%d:%d: Unexpected end of string: %s\n", line, col, match)
-									os.Exit(1)
+									return []Token{}
 								}
 
 								c = string(s[i:])
@@ -358,7 +358,7 @@ func Tokenize(input string) []Token {
 
 		if input == current {
 			fmt.Fprintf(os.Stderr, "%d:%d: Unexpected token: %s\n", line, col, strings.Split(input, "\n")[0])
-			os.Exit(1)
+			return []Token{}
 		}
 	}
 

@@ -20,7 +20,6 @@ const (
 	VAR_RETURN
 	VAR_BREAK
 	VAR_CONTINUE
-	VAR_UNKNOWN
 )
 
 type Variable struct {
@@ -51,7 +50,6 @@ var global_stack_mu = &sync.RWMutex{}
 func Error(t Token, format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, "%d:%d: ", t.Line, t.Col)
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
-	os.Exit(1)
 }
 
 func MakeVariable(t byte, v interface{}) Variable {
