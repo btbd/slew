@@ -108,7 +108,7 @@ type Token struct {
 
 var TOKEN_PATTERNS = []Token{
 	{TOKEN_IGNORE, `\/\/.*`, 0, 0},
-	{TOKEN_IGNORE, `\/\*[\S\s]*\*\/`, 0, 0},
+	{TOKEN_IGNORE, `(?s)\/\*.*?\*\/`, 0, 0},
 	{TOKEN_IGNORE, `\\r\n`, 0, 0},
 	{TOKEN_IGNORE, `\\n`, 0, 0},
 	{TOKEN_IGNORE, `\s`, 0, 0},

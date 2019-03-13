@@ -18,13 +18,13 @@ var last_token Token
 
 func ParseError(format string, args ...interface{}) {
 	if current_token.Line == 0 && current_token.Col == 0 {
-		fmt.Fprintf(os.Stderr, "unexpected EOF\n")
+		fmt.Fprintf(os.Stderr, "Unexpected EOF\n")
 	} else {
 		fmt.Fprintf(os.Stderr, "%d:%d: ", current_token.Line, current_token.Col)
 		fmt.Fprintf(os.Stderr, format+"\n", args...)
 	}
 
-	parser_token_index = len(parser_tokens)
+	parser_token_index++
 	parse_error = true
 }
 

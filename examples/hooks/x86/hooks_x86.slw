@@ -1,0 +1,78 @@
+p := process.Open("dummy32.exe");
+base := p.FindPattern([0x12, 0x34, 0x56, 0x78, 0x91]) + 5;
+add := p.ReadInt(base);
+subtract := p.ReadInt(base += 4);
+divide := p.ReadInt(base += 4);
+multiply := p.ReadInt(base += 4);
+
+hadd := p.Hook(add, process.FUNC_CDECL | process.FUNC_RET_INT32, [process.ARG_INT32, process.ARG_INT32], func(a, b) {
+    this.Unhook();
+    ret := p.Call(add, process.FUNC_CDECL | process.FUNC_RET_INT32, {
+        Type: process.ARG_INT32,
+        Value: a
+    },
+    {
+        Type: process.ARG_INT32,
+        Value: b
+    });
+    this.Hook();
+
+    console.Println("Add was called with (" + a + "," + b + ") -> true ret=" + ret)
+    return 123;
+});
+
+hsubtract := p.Hook(subtract, process.FUNC_STDCALL | process.FUNC_RET_INT64, [process.ARG_INT64, process.ARG_INT64], func(a, b) {
+    this.Unhook();
+    ret := p.Call(subtract, process.FUNC_STDCALL | process.FUNC_RET_INT64, {
+        Type: process.ARG_INT64,
+        Value: a
+    },
+    {
+        Type: process.ARG_INT64,
+        Value: b
+    });
+    this.Hook();
+    
+    console.Println("Subtract was called with (" + a + "," + b + ") -> true ret=" + ret)
+    return 456;
+});
+
+hdivide := p.Hook(divide, process.FUNC_FASTCALL | process.FUNC_RET_FLOAT64, [process.ARG_FLOAT32, process.ARG_FLOAT64], func(a, b) {
+    this.Unhook();
+    ret := p.Call(divide, process.FUNC_FASTCALL | process.FUNC_RET_FLOAT64, {
+        Type: process.ARG_FLOAT32,
+        Value: a
+    },
+    {
+        Type: process.ARG_FLOAT64,
+        Value: b
+    });
+    this.Hook();
+    
+    console.Println("Divide was called with (" + a + "," + b + ") -> true ret=" + ret)
+    return 789;
+});
+
+hmultiply := p.Hook(multiply, process.FUNC_THISCALL | process.FUNC_RET_FLOAT32, [process.ARG_INT32, process.ARG_INT16], func(a, b) {
+    this.Unhook();
+    ret := p.Call(multiply, process.FUNC_THISCALL | process.FUNC_RET_FLOAT32, {
+        Type: process.ARG_INT32,
+        Value: a
+    },
+    {
+        Type: process.ARG_INT16,
+        Value: b
+    });
+    this.Hook();
+    
+    console.Println("Multiply was called with (" + a + "," + b + ") -> true ret=" + ret)
+    return 420;
+});
+
+console.Println("Press any key to unhook + free all");
+console.ReadLine();
+
+hadd.Free();
+hsubtract.Free();
+hdivide.Free();
+hmultiply.Free();

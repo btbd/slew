@@ -297,8 +297,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 					return ret
 				}
 			}
-
-			break
 		}
 	case TOKEN_FOR:
 		{
@@ -387,6 +385,7 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 					return v2
 				} else {
 					Error(tree.T, `variable on left-hand side in assignment is undefined`)
+					break
 				}
 			} else if v1.Type == VAR_CHAR {
 				c := v1.Value.(VariableChar)
@@ -439,9 +438,11 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 						return MakeVariable(VAR_VARIABLE, &arr[index])
 					} else {
 						Error(tree.C[1].T, `index is out of range`)
+						break
 					}
 				} else {
 					Error(tree.C[1].T, `index is not a number`)
+					break
 				}
 			} else if v.Type == VAR_OBJECT {
 				i := ReduceVariable(Eval(tree.C[1], thread, stack))
@@ -458,6 +459,7 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 					}
 				} else {
 					Error(tree.T, `key is not a string`)
+					break
 				}
 			} else if v.Type == VAR_STRING {
 				i := ReduceVariable(Eval(tree.C[1], thread, stack))
@@ -494,32 +496,24 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			if v := ReduceVariable(Eval(tree.C[0], thread, stack)); v.Type == VAR_NUMBER {
 				return v
 			}
-
-			break
 		}
 	case TOKEN_SIGN_MINUS:
 		{
 			if v := ReduceVariable(Eval(tree.C[0], thread, stack)); v.Type == VAR_NUMBER {
 				return MakeVariable(VAR_NUMBER, -v.Value.(float64))
 			}
-
-			break
 		}
 	case TOKEN_NOT:
 		{
 			if v := ReduceVariable(Eval(tree.C[0], thread, stack)); v.Type == VAR_NUMBER && v.Value.(float64) == 0 {
 				return MakeVariable(VAR_NUMBER, float64(1))
 			}
-
-			break
 		}
 	case TOKEN_BIT_NOT:
 		{
 			if v := ReduceVariable(Eval(tree.C[0], thread, stack)); v.Type == VAR_NUMBER {
 				return MakeVariable(VAR_NUMBER, float64(^int(v.Value.(float64))))
 			}
-
-			break
 		}
 	case TOKEN_PRE_INC:
 		{
@@ -581,8 +575,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			} else if v1.Type == VAR_NUMBER && v2.Type == VAR_NUMBER {
 				return MakeVariable(VAR_NUMBER, v1.Value.(float64)+v2.Value.(float64))
 			}
-
-			break
 		}
 	case TOKEN_MINUS:
 		{
@@ -591,8 +583,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			if v1.Type == VAR_NUMBER && v2.Type == VAR_NUMBER {
 				return MakeVariable(VAR_NUMBER, v1.Value.(float64)-v2.Value.(float64))
 			}
-
-			break
 		}
 	case TOKEN_MULTIPLY:
 		{
@@ -601,8 +591,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			if v1.Type == VAR_NUMBER && v2.Type == VAR_NUMBER {
 				return MakeVariable(VAR_NUMBER, v1.Value.(float64)*v2.Value.(float64))
 			}
-
-			break
 		}
 	case TOKEN_DIVIDE:
 		{
@@ -611,8 +599,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			if v1.Type == VAR_NUMBER && v2.Type == VAR_NUMBER {
 				return MakeVariable(VAR_NUMBER, v1.Value.(float64)/v2.Value.(float64))
 			}
-
-			break
 		}
 	case TOKEN_MOD:
 		{
@@ -621,8 +607,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			if v1.Type == VAR_NUMBER && v2.Type == VAR_NUMBER {
 				return MakeVariable(VAR_NUMBER, math.Mod(v1.Value.(float64), v2.Value.(float64)))
 			}
-
-			break
 		}
 	case TOKEN_EQUAL_EQUAL:
 		{
@@ -631,8 +615,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			if v1.Type == v2.Type && v1.Value == v2.Value {
 				return MakeVariable(VAR_NUMBER, float64(1))
 			}
-
-			break
 		}
 	case TOKEN_NOT_EQUAL:
 		{
@@ -641,8 +623,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			if v1.Type != v2.Type || v1.Value != v2.Value {
 				return MakeVariable(VAR_NUMBER, float64(1))
 			}
-
-			break
 		}
 	case TOKEN_LESS:
 		{
@@ -651,8 +631,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			if v1.Type == VAR_NUMBER && v2.Type == VAR_NUMBER && v1.Value.(float64) < v2.Value.(float64) {
 				return MakeVariable(VAR_NUMBER, float64(1))
 			}
-
-			break
 		}
 	case TOKEN_GREATER:
 		{
@@ -661,8 +639,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			if v1.Type == VAR_NUMBER && v2.Type == VAR_NUMBER && v1.Value.(float64) > v2.Value.(float64) {
 				return MakeVariable(VAR_NUMBER, float64(1))
 			}
-
-			break
 		}
 	case TOKEN_LESS_EQUAL:
 		{
@@ -671,8 +647,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			if v1.Type == VAR_NUMBER && v2.Type == VAR_NUMBER && v1.Value.(float64) <= v2.Value.(float64) {
 				return MakeVariable(VAR_NUMBER, float64(1))
 			}
-
-			break
 		}
 	case TOKEN_GREATER_EQUAL:
 		{
@@ -681,8 +655,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			if v1.Type == VAR_NUMBER && v2.Type == VAR_NUMBER && v1.Value.(float64) >= v2.Value.(float64) {
 				return MakeVariable(VAR_NUMBER, float64(1))
 			}
-
-			break
 		}
 	case TOKEN_AND_AND:
 		{
@@ -709,8 +681,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			if v2.Type != VAR_NUMBER || v2.Value.(float64) != 0 {
 				return MakeVariable(VAR_NUMBER, float64(1))
 			}
-
-			break
 		}
 	case TOKEN_AND:
 		{
@@ -719,8 +689,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			if v1.Type == VAR_NUMBER && v2.Type == VAR_NUMBER {
 				return MakeVariable(VAR_NUMBER, float64(int(v1.Value.(float64))&int(v2.Value.(float64))))
 			}
-
-			break
 		}
 	case TOKEN_XOR:
 		{
@@ -729,8 +697,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			if v1.Type == VAR_NUMBER && v2.Type == VAR_NUMBER {
 				return MakeVariable(VAR_NUMBER, float64(int(v1.Value.(float64))^int(v2.Value.(float64))))
 			}
-
-			break
 		}
 	case TOKEN_OR:
 		{
@@ -739,8 +705,6 @@ func Eval(tree Tree, thread *[]Stack, stack int) Variable {
 			if v1.Type == VAR_NUMBER && v2.Type == VAR_NUMBER {
 				return MakeVariable(VAR_NUMBER, float64(int(v1.Value.(float64))|int(v2.Value.(float64))))
 			}
-
-			break
 		}
 	}
 

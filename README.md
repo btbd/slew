@@ -221,16 +221,17 @@ Find more examples [here](https://github.com/btbd/slew/tree/master/examples).
 - [regex](#regex)
 - [string](#string)
 - [thread](#thread)
+- [window](#window)
 
 ### array
 
 `.Each(arr, callback)`
 
-- For each variable in `arr`, the callback is called with `(variable, index)`. No return value.
+- For each variable in `arr`, the callback is called with `(variable, index)`. If the callback returns a non-zero value, the loop breaks. No return value.
 
 `.Find(arr, callback)`
 
-- For each variable in `arr`, the callback is called with `(variable, index)` until `callback` returns a non-false value. Returns the found variable.
+- For each variable in `arr`, the callback is called with `(variable, index)` until `callback` returns a non-zero value. Returns the found variable.
 
 `.Insert(arr, index, var [, var...])`
 
@@ -325,14 +326,14 @@ console.Println("Status: " + resp.Status + "\nBody: " + resp.Body);
 
 ### input
 
-`.IsKeyDown(key)`
-- Returns a boolean value representing whether `key` is pressed.
+`.IsKeyDown(key [, key...])`
+- Returns a non-zero value if all specified keys are pressed.
 
-`.KeyDown(key)`
-- Sends a global keydown event for `key`. No return value.
+`.KeyDown(key [, key...])`
+- Sends a global keydown event for the specified keys. No return value.
 
-`.KeyUp(key)`
-- Sends a global keyup event for `key`. No return value.
+`.KeyUp(key [, key...])`
+- Sends a global keyup event for the specified keys. No return value.
 
 `.OnKeyDown(callback)`
 - On every global keydown event, `callback` is called with `(key)`. No return value.
@@ -559,6 +560,7 @@ console.Println("Status: " + resp.Status + "\nBody: " + resp.Body);
 - `.Id` - The identifier of the process.
 - `.Name` - The name of the process.
 - `.ParentId` - The identifier of the process that created this process (its parent process).
+- `.Path` - The full path for the executable of the process.
 - `.PriClassBase` - The base priority of any threads created by this process.
 - `.Wow64` - Boolean value that indicates whether the process is running under WOW64 (32bit process).
 - `.Alloc(size [, allocType [, protect]])`
@@ -587,8 +589,8 @@ console.Println("Status: " + resp.Status + "\nBody: " + resp.Body);
             - `process.FUNC_RET_FLOAT32`, `process.FUNC_RET_FLOAT`
             - `process.FUNC_RET_FLOAT64`
             - `process.FUNC_RET_NONE`
-            - Optional:
-            - `process.FUNC_RET_RAW`
+            - Optional (combine to specify an array of byte instead of numerical value):
+                - `process.FUNC_RET_RAW`
     - `args` are the arguments to pass to the function. They must be objects containing a key/value pair for `Type` and `Value`.
         - `Type` specifies the type of argument and can be any one of the following values:
             - `process.ARG_INT8`
@@ -597,8 +599,8 @@ console.Println("Status: " + resp.Status + "\nBody: " + resp.Body);
             - `process.ARG_INT64`
             - `process.ARG_FLOAT32`, `process.ARG_FLOAT`
             - `process.ARG_FLOAT64`
-            - Optional:
-            - `process.ARG_RAW`
+            - Optional (combine to specify an array of byte instead of numerical value):
+                - `process.ARG_RAW`
         - `Value` can be any number value corresponding to `Type` unless `process.ARG_RAW` is specified. If `process.ARG_RAW` is specified, `Value` must be an array of bytes corresponding to the argument's type.
     - Returns the specified return value once the virtual thread is complete. If `process.FUNC_RET_NONE` is given, then the function returns immediately.
     - Example:
@@ -644,6 +646,60 @@ console.Println(ret);
     - This is the C equivalent of `GetProcAddress(GetModuleHandleA(module), proc);` in the address space of the process.
     - Example:
         - `p.GetProcAddress("kernel32.dll", "LoadLibraryA");`
+- `.Hook(address, flags, args, handler)`
+    - Hooks a compiled function in the process at `address` and routes it `handler`.
+    - `flags` specifies the type of function to hook.
+        - Calling conventions for a WOW64 or 32bit process (default `process.FUNC_CDECL`)
+            - `process.FUNC_CDECL`
+            - `process.FUNC_STDCALL`
+            - `process.FUNC_FASTCALL`
+            - `process.FUNC_THISCALL`
+        - Note: for a 64bit process, `__fastcall` is the only calling convention so no calling convention flag needs to be specified.
+        - Return types (default `process.FUNC_RET_INT32`):
+            - `process.FUNC_RET_INT32`, `process.FUNC_RET_INT`
+            - `process.FUNC_RET_INT64`
+            - `process.FUNC_RET_FLOAT32`, `process.FUNC_RET_FLOAT`
+            - `process.FUNC_RET_FLOAT64`
+            - Optional (Combine if `handler` will return an array of byte instead of the numerical value):
+                - `process.FUNC_RET_RAW`
+    - `args` is an array of argument flags that specifies the arguments to expect.
+        - `process.ARG_INT8`
+            - `process.ARG_INT16`
+            - `process.ARG_INT32`, `process.ARG_INT`
+            - `process.ARG_INT64`
+            - `process.ARG_FLOAT32`, `process.ARG_FLOAT`
+            - `process.ARG_FLOAT64`
+            - Optional (Combine to receive an array of byte instead of the numerical value when called):
+                - `process.ARG_RAW`
+    - `handler` is the function that the hooked function at `address` will be routed to.
+        - The return value of `handler` must be a number corresponding to the specified return type in `flags` since it will be used as the hooked function's new return value.
+        - The `this` object in `handler`'s scope will be the corresponding [hook object](#hook-object).
+    - The return value is the corresponding [hook object](#hook-object).
+    - Example:
+
+```js
+p := process.Open("test.exe"); // test.exe is a 32bit process
+addr := 0xBEEF;
+p.Hook(addr, process.FUNC_CDECL | process.FUNC_RET_INT32, [process.ARG_INT32, process.ARG_INT32], func(a, b) {
+    this.Unhook();
+    ret := p.Call(addr, process.FUNC_CDECL | process.FUNC_RET_INT32,
+    {
+        Type: process.ARG_INT32,
+        Value: a
+    },
+    {
+        Type: process.ARG_INT32,
+        Value: b
+    });
+    this.Hook();
+
+    console.Println("actual ret: " + ret);
+    return a*b;
+});
+
+for (;;) { thread.Sleep(100000); }
+```
+
 - `.LoadLibrary(library)`
     - Loads the specified module into the address space of the process. No return value.
     - This is the C equivalent of `LoadLibraryA(library);` in the address space of the process.
@@ -682,6 +738,8 @@ console.Println(ret);
     - Suspends execution of the process.
 - `.Threads()`
     - Returns an array of [thread object](#thread-object) for each execution thread in the process.
+- `.Windows()`
+    - Returns an array of [window object](#window-object) for each window created by the process.
 - `.Write(address, bytes)`
     - Writes an array of byte to `address`.
     - Returns a non-zero value on success.
@@ -733,6 +791,44 @@ console.Println(ret);
     - Resumes execution of the thread. Returns a non-zero value on success.
 - `.Suspend()`
     - Suspends execution of the thread. Returns a non-zero value on success.
+
+#### Window Object
+
+- `.Class` - The window's class.
+- `.Handle` - The handle associated with the window.
+- `.Parent` - The [window object](#window-object) of the window's parent.
+- `.ProcessId` - The process ID that created the window.
+- `.ThreadId` - The thread ID that created the window.
+- `.Children()`
+    - Returns an array of [window object](#window-object) of the window's children.
+- `.Focus()`
+    - Sets focus to the window.
+- `.Hide()`
+    - Hides the window.
+- `.Maximize()`
+    - Maximizes the window.
+- `.Minimize()`
+    - Minimizes the window.
+- `.Position([x, y])`
+    - Returns the position of the window as an object with `X` and `Y` properties.
+    - If `x` and `y` are specified, it sets the window's position to (`x`, `y`).
+- `.Show()`
+    - Shows the window.
+- `.Size([width, height])`
+    - Returns the dimensions of the window as an object with `Width` and `Height` properties.
+    - If `width` and `height` are specified, it resizes the window to `width` by `height`. 
+- `.Title([title])`
+    - Returns the window's title.
+    - If `title` is specified, it sets the window's title to `title`.
+
+#### Hook Object
+
+- `.Hook()`
+    - Hooks the corresponding function.
+- `.Unhook()`
+    - Unhooks the corresponding function.
+- `.Free()`
+    - Unhooks the corresponding function and frees the generated procedures in memory.
 
 #### Memory Protection Constants ([full doc](https://docs.microsoft.com/en-us/windows/desktop/memory/memory-protection-constants))
 
@@ -819,3 +915,11 @@ console.Println(ret);
 
 `.Sleep(ms)`
 - Halts execution of the calling thread for `ms` milliseconds.
+
+### window
+
+`.Foreground()`
+- Returns the [window object](#window-object) for the foreground window.
+
+`.List()`
+- Returns an array of [window object](#window-object) for every top-level window on the screen.
