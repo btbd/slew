@@ -18,7 +18,7 @@ To create an executable, do `slew.exe -o <output> <file>`.
 
 Run without arguments to start the REPL.
 
-## Examples
+## Basic Examples
 
 ### Hello, world!
 ```js
@@ -211,6 +211,7 @@ Find more examples [here](https://github.com/btbd/slew/tree/master/examples).
 - [array](#array)
 - [console](#console)
 - [date](#date)
+- [file](#file)
 - [http](#http)
 - [input](#input)
 - [json](#json)
@@ -290,6 +291,67 @@ Find more examples [here](https://github.com/btbd/slew/tree/master/examples).
     - `.DayOfWeek` - The day of the week (0-6) where 0 is Sunday and 6 is Saturday.
     - `.Month` - The month (1-12) where 1 is January and 12 is December.
     - `.Year` - The year (1601-30827).
+
+### file
+
+`.Stderr` - The [file object](#file-object) for `stderr`.
+
+`.Stdin` - The [file object](#file-object) for `stdin`.
+
+`.Stdout` - The [file object](#file-object) for `stdout`.
+
+`.Open(file [, flags [, perm]])`
+
+-  Returns the [file object](#file-object) for the specified file.
+
+`.Remove(name)`
+
+- Removes the named file or (empty) directory. No return value on success or the file path that caused an error.
+
+`.RemoveAll(path)`
+
+- Removes `path` and any children it contains. No return value on success or the file path that caused an error.
+
+#### File Object
+
+`.Close()`
+
+- Closes the handle to the file. No return value.
+
+`.Read(n)`
+
+- Reads up to `n` bytes from the file and returns an array of byte containing the read buffer.
+
+`.ReadAt(n, off)`
+
+- Reads up to `n` bytes from the file starting at byte offset `off` and returns an array of byte containing the read buffer.
+
+`.Seek(offset, whence)`
+- Sets the offset for the next `Read` or `Write` on file to `offset`.
+- `whence` must be one of the following values:
+    - `file.SEEK_SET` - Seek relative to the origin of the file.
+    - `file.SEEK_CUR` - Seek relative to the current offset.
+    - `file.SEEK_END` - Seek relative to the end of the file.
+
+`.Stat()`
+
+- Returns a [file info object](#file-info-object) for the file.
+    
+`.Write([bytes|string])`
+
+- Writes an array of byte or a string to the file and returns the number of bytes written.
+
+`.WriteAt([bytes|string], off)`
+
+- Writes an array of byte or a string to the file at byte offset `off` and returns the number of bytes written.
+
+#### File Info Object
+
+- `.Name` - The base name of the file.
+- `.Size` - The size of the file in bytes.
+- `.Mode` - The file mode bits.
+- `.ModTime` - The modification time.
+- `.IsDir` - Boolean value for whether the file is a directory.
 
 ### http
 
@@ -822,6 +884,8 @@ for (;;) { thread.Sleep(100000); }
     - If `title` is specified, it sets the window's title to `title`.
 
 #### Hook Object
+
+- `.Address` - The address of the hooked function.
 
 - `.Hook()`
     - Hooks the corresponding function.
