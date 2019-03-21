@@ -584,6 +584,19 @@ func string_ToNumber(this *Variable, args []Variable) Variable {
 	return MakeVariable(VAR_NUMBER, float64(0))
 }
 
+func string_FromBytes(this *Variable, args []Variable) Variable {
+	if len(args) > 0 && args[0].Type == VAR_ARRAY {
+		var s []byte
+		for _, b := range *args[0].Value.(*[]Variable) {
+			if b.Type == VAR_NUMBER {
+				s = append(s, byte(b.Value.(float64)))
+			}
+		}
+		return MakeVariable(VAR_STRING, string(s))
+	}
+	return MakeVariable(VAR_STRING, "")
+}
+
 func string_FromCharCode(this *Variable, args []Variable) Variable {
 	s := ""
 
@@ -679,6 +692,18 @@ func string_Split(this *Variable, args []Variable) Variable {
 		s := strings.Split(args[0].Value.(string), args[1].Value.(string))
 		for _, e := range s {
 			r = append(r, MakeVariable(VAR_STRING, e))
+		}
+	}
+
+	return MakeVariable(VAR_ARRAY, &r)
+}
+
+func string_ToBytes(this *Variable, args []Variable) Variable {
+	var r []Variable
+
+	if len(args) > 0 && args[0].Type == VAR_STRING {
+		for _, b := range []byte(args[0].Value.(string)) {
+			r = append(r, MakeVariable(VAR_NUMBER, float64(b)))
 		}
 	}
 
@@ -1670,6 +1695,146 @@ func date_Time(this *Variable, args []Variable) Variable {
 }
 
 /***********************************************/
+/*                      file                   */
+/***********************************************/
+func FileObject(file *os.File) Variable {
+	obj := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
+	AddProp(&obj, "Close", MakeVariable(VAR_NFUNCTION, func(this *Variable, args []Variable) Variable {
+		file.Close()
+		return MakeVariable(VAR_NUMBER, float64(0))
+	}))
+	AddProp(&obj, "Seek", MakeVariable(VAR_NFUNCTION, func(this *Variable, args []Variable) Variable {
+		if len(args) > 0 && args[0].Type == VAR_NUMBER && args[1].Type == VAR_NUMBER {
+			if n, err := file.Seek(int64(args[0].Value.(float64)), int(args[1].Value.(float64))); err == nil {
+				return MakeVariable(VAR_NUMBER, float64(n))
+			}
+		}
+		return MakeVariable(VAR_NUMBER, float64(0))
+	}))
+	AddProp(&obj, "Read", MakeVariable(VAR_NFUNCTION, func(this *Variable, args []Variable) Variable {
+		var r []Variable
+		if len(args) > 0 && args[0].Type == VAR_NUMBER {
+			b := make([]byte, int(args[0].Value.(float64)))
+			if n, err := file.Read(b); err == nil || err == io.EOF {
+				for i := 0; i < n; i++ {
+					r = append(r, MakeVariable(VAR_NUMBER, float64(b[i])))
+				}
+			}
+		}
+		return MakeVariable(VAR_ARRAY, &r)
+	}))
+	AddProp(&obj, "ReadAt", MakeVariable(VAR_NFUNCTION, func(this *Variable, args []Variable) Variable {
+		var r []Variable
+		if len(args) > 1 && args[0].Type == VAR_NUMBER && args[1].Type == VAR_NUMBER {
+			b := make([]byte, int(args[0].Value.(float64)))
+			if n, err := file.ReadAt(b, int64(args[1].Value.(float64))); err == nil || err == io.EOF {
+				for i := 0; i < n; i++ {
+					r = append(r, MakeVariable(VAR_NUMBER, float64(b[i])))
+				}
+			}
+		}
+		return MakeVariable(VAR_ARRAY, &r)
+	}))
+	AddProp(&obj, "Write", MakeVariable(VAR_NFUNCTION, func(this *Variable, args []Variable) Variable {
+		if len(args) > 0 {
+			if args[0].Type == VAR_ARRAY {
+				var buffer []byte
+				for _, b := range *args[0].Value.(*[]Variable) {
+					if b.Type != VAR_NUMBER {
+						return MakeVariable(VAR_NUMBER, float64(0))
+					}
+					buffer = append(buffer, byte(b.Value.(float64)))
+				}
+
+				if n, err := file.Write(buffer); err == nil || err == io.EOF {
+					return MakeVariable(VAR_NUMBER, float64(n))
+				}
+			} else if args[0].Type == VAR_STRING {
+				if n, err := file.WriteString(args[0].Value.(string)); err == nil {
+					return MakeVariable(VAR_NUMBER, float64(n))
+				}
+			}
+		}
+		return MakeVariable(VAR_NUMBER, float64(0))
+	}))
+	AddProp(&obj, "WriteAt", MakeVariable(VAR_NFUNCTION, func(this *Variable, args []Variable) Variable {
+		if len(args) > 1 && args[1].Type == VAR_NUMBER {
+			var buffer []byte
+			if args[0].Type == VAR_ARRAY {
+				for _, b := range *args[0].Value.(*[]Variable) {
+					if b.Type != VAR_NUMBER {
+						return MakeVariable(VAR_NUMBER, float64(0))
+					}
+					buffer = append(buffer, byte(b.Value.(float64)))
+				}
+			} else if args[1].Type == VAR_STRING {
+				buffer = []byte(args[0].Value.(string))
+			}
+
+			if n, err := file.WriteAt(buffer, int64(args[1].Value.(float64))); err == nil || err == io.EOF {
+				return MakeVariable(VAR_NUMBER, float64(n))
+			}
+		}
+		return MakeVariable(VAR_NUMBER, float64(0))
+	}))
+	AddProp(&obj, "Stat", MakeVariable(VAR_NFUNCTION, func(this *Variable, args []Variable) Variable {
+		r := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
+		if info, err := file.Stat(); err == nil {
+			AddProp(&r, "Name", MakeVariable(VAR_STRING, info.Name()))
+			AddProp(&r, "Size", MakeVariable(VAR_NUMBER, float64(info.Size())))
+			AddProp(&r, "Mode", MakeVariable(VAR_NUMBER, float64(info.Mode())))
+			AddProp(&r, "ModTime", MakeVariable(VAR_NUMBER, float64(info.ModTime().UnixNano())))
+			if info.IsDir() {
+				AddProp(&r, "IsDir", MakeVariable(VAR_NUMBER, float64(1)))
+			} else {
+				AddProp(&r, "IsDir", MakeVariable(VAR_NUMBER, float64(0)))
+			}
+		}
+		return r
+	}))
+	return obj
+}
+
+func file_Open(this *Variable, args []Variable) Variable {
+	if l := len(args); l > 0 && args[0].Type == VAR_STRING {
+		flag := os.O_RDWR | os.O_CREATE
+		perm := 0777
+		if l > 1 && args[1].Type == VAR_NUMBER {
+			flag = int(args[1].Value.(float64))
+			if l > 2 && args[2].Type == VAR_NUMBER {
+				perm = int(args[2].Value.(float64))
+			}
+		}
+
+		if file, err := os.OpenFile(args[0].Value.(string), flag, os.FileMode(perm)); err == nil {
+			return FileObject(file)
+		}
+	}
+
+	return MakeVariable(VAR_OBJECT, &map[string]*Variable{})
+}
+
+func file_Remove(this *Variable, args []Variable) Variable {
+	if l := len(args); l > 0 && args[0].Type == VAR_STRING {
+		if err := os.Remove(args[0].Value.(string)); err != nil {
+			return MakeVariable(VAR_STRING, (err.(*os.PathError)).Path)
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+func file_RemoveAll(this *Variable, args []Variable) Variable {
+	if l := len(args); l > 0 && args[0].Type == VAR_STRING {
+		if err := os.RemoveAll(args[0].Value.(string)); err != nil {
+			return MakeVariable(VAR_STRING, (err.(*os.PathError)).Path)
+		}
+	}
+
+	return MakeVariable(VAR_NUMBER, float64(0))
+}
+
+/***********************************************/
 /*                    process                  */
 /***********************************************/
 func process_Open(this *Variable, args []Variable) Variable {
@@ -2631,6 +2796,7 @@ func process_Hook32(this *Variable, args []Variable) Variable {
 
 					if proc := VirtualAllocEx(h, 0, uint32(len(buffer)), w32.MEM_COMMIT|w32.MEM_RESERVE, w32.PAGE_EXECUTE_READWRITE); proc != 0 && WriteProcessMemory(h, proc, uintptr(unsafe.Pointer(&buffer[0])), uint(len(buffer))) == nil {
 						if patch, err := ReadProcessMemory(h, uintptr(addr), 5); err == nil {
+							AddProp(&obj, "Address", MakeVariable(VAR_NUMBER, float64(addr)))
 							AddProp(&obj, "Hook", MakeVariable(VAR_NFUNCTION, func(this *Variable, args []Variable) Variable {
 								SetJMP32(h, uint32(proc), addr)
 								return MakeVariable(VAR_NUMBER, float64(0))
@@ -2809,6 +2975,7 @@ func process_Hook64(this *Variable, args []Variable) Variable {
 
 					if proc := VirtualAllocEx(h, 0, uint32(len(buffer)), w32.MEM_COMMIT|w32.MEM_RESERVE, w32.PAGE_EXECUTE_READWRITE); proc != 0 && WriteProcessMemory(h, proc, uintptr(unsafe.Pointer(&buffer[0])), uint(len(buffer))) == nil {
 						if patch, err := ReadProcessMemory(h, uintptr(addr), 14); err == nil {
+							AddProp(&obj, "Address", MakeVariable(VAR_NUMBER, float64(addr)))
 							AddProp(&obj, "Hook", MakeVariable(VAR_NFUNCTION, func(this *Variable, args []Variable) Variable {
 								SetJMP64(h, uint64(proc), addr)
 								return MakeVariable(VAR_NUMBER, float64(0))
@@ -3649,6 +3816,7 @@ func GetWindowObject(hwnd w32.HWND) Variable {
 	if hwnd != 0 {
 		AddProp(&window, "Handle", MakeVariable(VAR_NUMBER, float64(hwnd)))
 
+		AddProp(&window, "SendMessage", MakeVariable(VAR_NFUNCTION, window_SendMessage))
 		AddProp(&window, "Title", MakeVariable(VAR_NFUNCTION, window_Title))
 		AddProp(&window, "Position", MakeVariable(VAR_NFUNCTION, window_Position))
 		AddProp(&window, "Size", MakeVariable(VAR_NFUNCTION, window_Size))
@@ -3684,6 +3852,13 @@ func window_List(this *Variable, args []Variable) Variable {
 	}, 0)
 
 	return MakeVariable(VAR_ARRAY, &r)
+}
+
+func window_SendMessage(this *Variable, args []Variable) Variable {
+	if h := GetHandle(this); h != 0 && len(args) > 2 && args[0].Type == VAR_NUMBER && args[1].Type == VAR_NUMBER && args[2].Type == VAR_NUMBER {
+		return MakeVariable(VAR_NUMBER, float64(w32.SendMessage(w32.HWND(h), uint32(args[0].Value.(float64)), uintptr(uint64(args[1].Value.(float64))), uintptr(uint64(args[2].Value.(float64))))))
+	}
+	return MakeVariable(VAR_NUMBER, float64(0))
 }
 
 func window_Title(this *Variable, args []Variable) Variable {
@@ -3950,6 +4125,11 @@ func InitStack() {
 	StackPush("len", nil, -1, MakeVariable(VAR_NFUNCTION, global_len))
 	StackPush("type", nil, -1, MakeVariable(VAR_NFUNCTION, global_type))
 	StackPush("copy", nil, -1, MakeVariable(VAR_NFUNCTION, global_copy))
+	var arguments []Variable
+	for _, s := range os.Args {
+		arguments = append(arguments, MakeVariable(VAR_STRING, s))
+	}
+	StackPush("arguments", nil, -1, MakeVariable(VAR_ARRAY, &arguments))
 
 	object := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
 	AddProp(&object, "Keys", MakeVariable(VAR_NFUNCTION, object_Keys))
@@ -4004,6 +4184,7 @@ func InitStack() {
 	str := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
 	AddProp(&str, "CharCodeAt", MakeVariable(VAR_NFUNCTION, string_CharCodeAt))
 	AddProp(&str, "Contains", MakeVariable(VAR_NFUNCTION, string_Contains))
+	AddProp(&str, "FromBytes", MakeVariable(VAR_NFUNCTION, string_FromBytes))
 	AddProp(&str, "FromCharCode", MakeVariable(VAR_NFUNCTION, string_FromCharCode))
 	AddProp(&str, "FromNumber", MakeVariable(VAR_NFUNCTION, number_ToString))
 	AddProp(&str, "IndexOf", MakeVariable(VAR_NFUNCTION, string_IndexOf))
@@ -4011,6 +4192,7 @@ func InitStack() {
 	AddProp(&str, "Replace", MakeVariable(VAR_NFUNCTION, string_Replace))
 	AddProp(&str, "Slice", MakeVariable(VAR_NFUNCTION, string_Slice))
 	AddProp(&str, "Split", MakeVariable(VAR_NFUNCTION, string_Split))
+	AddProp(&str, "ToBytes", MakeVariable(VAR_NFUNCTION, string_ToBytes))
 	AddProp(&str, "ToLower", MakeVariable(VAR_NFUNCTION, string_ToLower))
 	AddProp(&str, "ToNumber", MakeVariable(VAR_NFUNCTION, string_ToNumber))
 	AddProp(&str, "ToUpper", MakeVariable(VAR_NFUNCTION, string_ToUpper))
@@ -4126,6 +4308,18 @@ func InitStack() {
 	AddProp(&date, "Now", MakeVariable(VAR_NFUNCTION, date_Now))
 	AddProp(&date, "Time", MakeVariable(VAR_NFUNCTION, date_Time))
 	StackPush("date", nil, -1, date)
+
+	file := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
+	AddProp(&file, "SEEK_SET", MakeVariable(VAR_NUMBER, float64(os.SEEK_SET)))
+	AddProp(&file, "SEEK_CUR", MakeVariable(VAR_NUMBER, float64(os.SEEK_CUR)))
+	AddProp(&file, "SEEK_END", MakeVariable(VAR_NUMBER, float64(os.SEEK_END)))
+	AddProp(&file, "Stdout", FileObject(os.Stdout))
+	AddProp(&file, "Stdin", FileObject(os.Stdin))
+	AddProp(&file, "Stderr", FileObject(os.Stderr))
+	AddProp(&file, "Open", MakeVariable(VAR_NFUNCTION, file_Open))
+	AddProp(&file, "Remove", MakeVariable(VAR_NFUNCTION, file_Remove))
+	AddProp(&file, "RemoveAll", MakeVariable(VAR_NFUNCTION, file_RemoveAll))
+	StackPush("file", nil, -1, file)
 
 	process := MakeVariable(VAR_OBJECT, &map[string]*Variable{})
 	AddProp(&process, "Open", MakeVariable(VAR_NFUNCTION, process_Open))
@@ -4347,6 +4541,77 @@ func InitStack() {
 	AddProp(&input, "Key", key)
 	StackPush("input", nil, -1, input)
 
+	msgHookCallback := syscall.NewCallback(func(ptr uintptr) uintptr {
+		hook := *(*MessageHook)(unsafe.Pointer(ptr))
+		if threadData, err := ReadProcessMemory(hook.ProcessHandle, uintptr(hook.ThreadIdAddress), 4); err == nil {
+			if thread := OpenThread(0x2, 0, *(*w32.DWORD)(unsafe.Pointer(&threadData[0]))); thread != 0 {
+				var args []Variable
+				if len(hook.Args) > 0 {
+					if argData, err := ReadProcessMemory(hook.ProcessHandle, uintptr(hook.ArgsAddress), uint(8*len(hook.Args))); err == nil {
+						for i, a := range hook.Args {
+							if (a & 0x80) != 0 {
+								var r []Variable
+								for b := 0; b < int(a%9); b++ {
+									r = append(r, MakeVariable(VAR_NUMBER, float64(argData[(i*8)+b])))
+								}
+								args = append(args, MakeVariable(VAR_ARRAY, &r))
+							} else {
+								switch a {
+								case 1:
+									args = append(args, MakeVariable(VAR_NUMBER, float64(*(*int8)(unsafe.Pointer(&argData[i*8])))))
+								case 2:
+									args = append(args, MakeVariable(VAR_NUMBER, float64(*(*int16)(unsafe.Pointer(&argData[i*8])))))
+								case 4:
+									args = append(args, MakeVariable(VAR_NUMBER, float64(*(*int32)(unsafe.Pointer(&argData[i*8])))))
+								case 8:
+									args = append(args, MakeVariable(VAR_NUMBER, float64(*(*int64)(unsafe.Pointer(&argData[i*8])))))
+								case 13:
+									args = append(args, MakeVariable(VAR_NUMBER, float64(*(*float32)(unsafe.Pointer(&argData[i*8])))))
+								case 17:
+									args = append(args, MakeVariable(VAR_NUMBER, *(*float64)(unsafe.Pointer(&argData[i*8]))))
+								}
+							}
+						}
+					}
+				}
+
+				if ret := CallUserFunc(hook.UserHandler, hook.Object, args); ret.Type == VAR_NUMBER {
+					if f := hook.Ret; f&0x02 != 0 {
+						v := float32(ret.Value.(float64))
+						WriteProcessMemory(hook.ProcessHandle, uintptr(hook.RetAddress), uintptr(unsafe.Pointer(&v)), 4)
+					} else if f&0x04 != 0 {
+						v := ret.Value.(float64)
+						WriteProcessMemory(hook.ProcessHandle, uintptr(hook.RetAddress), uintptr(unsafe.Pointer(&v)), 8)
+					} else {
+						v := uint64(ret.Value.(float64))
+						WriteProcessMemory(hook.ProcessHandle, uintptr(hook.RetAddress), uintptr(unsafe.Pointer(&v)), 8)
+					}
+				} else if ret.Type == VAR_ARRAY {
+					var bytes []byte
+					for _, b := range *ret.Value.(*[]Variable) {
+						if b.Type == VAR_NUMBER {
+							bytes = append(bytes, byte(b.Value.(float64)))
+						}
+					}
+
+					l := len(bytes)
+
+					if f := hook.Ret; f&0x02 != 0 && l == 4 {
+						WriteProcessMemory(hook.ProcessHandle, uintptr(hook.RetAddress), uintptr(unsafe.Pointer(&bytes[0])), 4)
+					} else if f&0x04 != 0 && l == 8 {
+						WriteProcessMemory(hook.ProcessHandle, uintptr(hook.RetAddress), uintptr(unsafe.Pointer(&bytes[0])), 8)
+					} else if l > 0 && l < 9 {
+						WriteProcessMemory(hook.ProcessHandle, uintptr(hook.RetAddress), uintptr(unsafe.Pointer(&bytes[0])), uint(l))
+					}
+				}
+
+				ResumeThread(thread)
+				w32.CloseHandle(thread)
+			}
+		}
+		return 0
+	})
+
 	go func() {
 		msgThreadId = windows.GetCurrentThreadId()
 		w32.SetWindowsHookEx(w32.WH_KEYBOARD_LL, KeyboardHook, 0, 0)
@@ -4354,84 +4619,14 @@ func InitStack() {
 		var msg w32.MSG
 		for w32.GetMessage(&msg, 0, 0, 0) != 0 {
 			if msg.Message == 660 {
-				w32.CloseHandle(CreateThread(syscall.NewCallback(func() uintptr {
-					msgHooksMutex.RLock()
-					for _, hook := range msgHooks {
-						if hook.ProcessId == uint32(msg.WParam) && hook.Address == uint64(msg.LParam) {
-							msgHooksMutex.RUnlock()
-							if threadData, err := ReadProcessMemory(hook.ProcessHandle, uintptr(hook.ThreadIdAddress), 4); err == nil {
-								if thread := OpenThread(0x2, 0, *(*w32.DWORD)(unsafe.Pointer(&threadData[0]))); thread != 0 {
-									var args []Variable
-									if len(hook.Args) > 0 {
-										if argData, err := ReadProcessMemory(hook.ProcessHandle, uintptr(hook.ArgsAddress), uint(8*len(hook.Args))); err == nil {
-											for i, a := range hook.Args {
-												if (a & 0x80) != 0 {
-													var r []Variable
-													for b := 0; b < int(a%9); b++ {
-														r = append(r, MakeVariable(VAR_NUMBER, float64(argData[(i*8)+b])))
-													}
-													args = append(args, MakeVariable(VAR_ARRAY, &r))
-												} else {
-													switch a {
-													case 1:
-														args = append(args, MakeVariable(VAR_NUMBER, float64(*(*int8)(unsafe.Pointer(&argData[i*8])))))
-													case 2:
-														args = append(args, MakeVariable(VAR_NUMBER, float64(*(*int16)(unsafe.Pointer(&argData[i*8])))))
-													case 4:
-														args = append(args, MakeVariable(VAR_NUMBER, float64(*(*int32)(unsafe.Pointer(&argData[i*8])))))
-													case 8:
-														args = append(args, MakeVariable(VAR_NUMBER, float64(*(*int64)(unsafe.Pointer(&argData[i*8])))))
-													case 13:
-														args = append(args, MakeVariable(VAR_NUMBER, float64(*(*float32)(unsafe.Pointer(&argData[i*8])))))
-													case 17:
-														args = append(args, MakeVariable(VAR_NUMBER, *(*float64)(unsafe.Pointer(&argData[i*8]))))
-													}
-												}
-											}
-										}
-									}
-
-									if ret := CallUserFunc(hook.UserHandler, hook.Object, args); ret.Type == VAR_NUMBER {
-										if f := hook.Ret; f&0x02 != 0 {
-											v := float32(ret.Value.(float64))
-											WriteProcessMemory(hook.ProcessHandle, uintptr(hook.RetAddress), uintptr(unsafe.Pointer(&v)), 4)
-										} else if f&0x04 != 0 {
-											v := ret.Value.(float64)
-											WriteProcessMemory(hook.ProcessHandle, uintptr(hook.RetAddress), uintptr(unsafe.Pointer(&v)), 8)
-										} else {
-											v := uint64(ret.Value.(float64))
-											WriteProcessMemory(hook.ProcessHandle, uintptr(hook.RetAddress), uintptr(unsafe.Pointer(&v)), 8)
-										}
-									} else if ret.Type == VAR_ARRAY {
-										var bytes []byte
-										for _, b := range *ret.Value.(*[]Variable) {
-											if b.Type == VAR_NUMBER {
-												bytes = append(bytes, byte(b.Value.(float64)))
-											}
-										}
-
-										l := len(bytes)
-
-										if f := hook.Ret; f&0x02 != 0 && l == 4 {
-											WriteProcessMemory(hook.ProcessHandle, uintptr(hook.RetAddress), uintptr(unsafe.Pointer(&bytes[0])), 4)
-										} else if f&0x04 != 0 && l == 8 {
-											WriteProcessMemory(hook.ProcessHandle, uintptr(hook.RetAddress), uintptr(unsafe.Pointer(&bytes[0])), 8)
-										} else if l > 0 && l < 9 {
-											WriteProcessMemory(hook.ProcessHandle, uintptr(hook.RetAddress), uintptr(unsafe.Pointer(&bytes[0])), uint(l))
-										}
-									}
-
-									ResumeThread(thread)
-									w32.CloseHandle(thread)
-								}
-							}
-							return 0
-						}
+				msgHooksMutex.RLock()
+				for _, hook := range msgHooks {
+					if hook.ProcessId == uint32(msg.WParam) && hook.Address == uint64(msg.LParam) {
+						w32.CloseHandle(CreateThread(msgHookCallback, uintptr(unsafe.Pointer(&hook))))
+						break
 					}
-
-					msgHooksMutex.RUnlock()
-					return 0
-				}), 0))
+				}
+				msgHooksMutex.RUnlock()
 			}
 
 			w32.TranslateMessage(&msg)
