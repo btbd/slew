@@ -4612,7 +4612,7 @@ func InitStack() {
 		return 0
 	})
 
-	go func() {
+	w32.CloseHandle(CreateThread(syscall.NewCallback(func(ptr uintptr) uintptr {
 		msgThreadId = windows.GetCurrentThreadId()
 		w32.SetWindowsHookEx(w32.WH_KEYBOARD_LL, KeyboardHook, 0, 0)
 
@@ -4632,5 +4632,7 @@ func InitStack() {
 			w32.TranslateMessage(&msg)
 			w32.DispatchMessage(&msg)
 		}
-	}()
+
+		return 0
+	}), 0))
 }
